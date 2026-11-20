@@ -1,0 +1,6 @@
+node_modules/
+dist/
+src/api/schema.d.ts
+
+# The client's own modules, kept even where a global ignore file drops lib/.
+!src/lib/

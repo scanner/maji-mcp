@@ -1,0 +1,169 @@
+.empty {
+  color: var(--muted);
+  padding: var(--space-3) 0;
+}
+.items {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  column-gap: var(--space-2);
+  scroll-margin-block: var(--space-3);
+}
+.pick {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: calc(var(--space-2) + 3px) 0 0;
+  accent-color: var(--accent);
+}
+.pick-gap {
+  width: 1.25rem;
+}
+li:not(:has(.pick, .pick-gap)) {
+  grid-template-columns: 1fr;
+}
+.open {
+  display: grid;
+  gap: 0.125rem;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.current .open {
+  border-color: var(--accent);
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+.blocking .open {
+  border-left-width: 4px;
+  border-left-style: double;
+}
+
+/*
+ * An item open in its row: the row's button and the item's detail beneath it make one
+ * card, with the open item's accent down its side. They stay joined while the detail
+ * shrinks closed.
+ */
+.open[aria-expanded] {
+  position: relative;
+  padding-right: var(--space-6);
+}
+.chevron {
+  position: absolute;
+  top: calc(var(--space-2) + 0.3em);
+  right: var(--space-3);
+  width: 0.55rem;
+  height: 0.55rem;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 150ms ease-out;
+}
+.open[aria-expanded="true"] .chevron {
+  transform: translateY(0.2em) rotate(-135deg);
+}
+li:has(> .inline) > .open {
+  border-color: var(--accent);
+  border-bottom-width: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+li:has(> .inline) .title {
+  -webkit-line-clamp: unset;
+  line-clamp: none;
+}
+.inline {
+  grid-column: -2 / -1;
+  display: grid;
+  grid-template-rows: 1fr;
+  border: 1px solid var(--accent);
+  border-top-width: 0;
+  border-radius: 0 0 var(--radius) var(--radius);
+  box-shadow: inset 4px 0 0 var(--accent);
+  background: var(--surface);
+}
+.blocking > .inline {
+  border-left-width: 4px;
+  border-left-style: double;
+}
+.clip {
+  min-height: 0;
+}
+.moving > .clip {
+  overflow: hidden;
+}
+.body {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0 var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--line);
+}
+.close {
+  justify-self: start;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  /* A question's title is the question, which can run long; three lines show it. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+.subject {
+  color: var(--muted);
+  font-family: var(--font-code);
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  font-size: var(--step--1);
+}
+.when {
+  color: var(--muted);
+}
+.ago {
+  white-space: nowrap;
+}
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+}
+.tag {
+  font-size: var(--step--1);
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+}
+.risk-high {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  font-weight: 600;
+}
+.blocking-tag {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}

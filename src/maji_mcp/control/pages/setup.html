@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up maji-mcp</title>
+<link rel="stylesheet" href="/setup.css">
+<script src="/setup.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="eyebrow">maji-mcp &middot; first passkey</p>
+  <h1>Set up maji-mcp</h1>
+
+  <section id="register" hidden>
+    <p>Decisions in maji-mcp are signed with a passkey, so only you can make them. Create one now; your device will ask for Touch ID or your PIN.</p>
+    <form id="form">
+      <label for="name">Name for this passkey</label>
+      <input id="name" name="name" maxlength="100" value="This Mac" required>
+      <button id="create" type="submit">Create a passkey</button>
+    </form>
+  </section>
+
+  <section id="codes" hidden>
+    <h2>Save your recovery codes</h2>
+    <p>Each code adds a passkey once, at any time, if you lose yours. Keep them in your password manager, and as safe as a passkey. This is the only time they are shown.</p>
+    <ol id="code-list" class="codes"></ol>
+    <div class="row">
+      <button id="copy" type="button">Copy all</button>
+      <span id="copied" class="muted" hidden>Copied</span>
+    </div>
+    <label class="check"><input id="saved" type="checkbox"> I've saved them</label>
+    <p id="finished" hidden><strong>maji-mcp is set up.</strong> Requests for your approval wait in <a href="/queue">the queue</a>; sign in there with the passkey you just made.</p>
+  </section>
+
+  <section id="already" hidden>
+    <p>A passkey is registered already, so there is nothing to set up here. To add another, sign in from a device that has one.</p>
+  </section>
+
+  <section id="no-code" hidden>
+    <p>This page needs the setup link that <code>make up</code> opens. Run <code>make up</code> again for a new one; each link works once, for ten minutes.</p>
+  </section>
+
+  <p id="error" class="error" role="alert" hidden></p>
+</main>
+</body>
+</html>

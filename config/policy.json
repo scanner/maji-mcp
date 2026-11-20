@@ -1,0 +1,5 @@
+{
+  "principals": {
+    "claude-code": {"allow": ["maji.*", "sentry.*", "jira.*", "github.*", "org.*", "skills.*"], "per_minute": 120}
+  }
+}

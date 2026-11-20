@@ -1,0 +1,33 @@
+# To install pre-commit, run:
+#   uv run pre-commit install
+#
+# Pre-commit checks then run on staged files. To run them on everything:
+#   uv run pre-commit run --all-files
+#
+---
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+      - id: check-merge-conflict
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.0
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^(src|tests)/
+      - id: ruff-format
+        files: ^(src|tests)/
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: Run mypy
+        entry: uv run mypy
+        language: system
+        pass_filenames: false
+        files: ^(src|tests)/.*\.py$

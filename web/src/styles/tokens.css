@@ -1,0 +1,103 @@
+/*
+ * Design tokens: every colour, type and spacing value the client uses.
+ *
+ * The hues come from the Okabe-Ito set, which stays distinguishable with the common
+ * colour-vision deficiencies, darkened for the light theme and lightened for the
+ * dark one until every text colour reaches at least 4.5:1 against the backgrounds
+ * it sits on (tests/contrast.test.ts checks each pair). Colour never carries
+ * meaning alone: every state also has words, and usually a symbol.
+ *
+ *   accent   blue          actions, links, focus
+ *   ok       bluish green  approved, applied
+ *   danger   vermilion     refuse, reject
+ *   caution  orange        widens access, needs proof
+ *   session  reddish purple  a session's name, to find it at a glance; it means
+ *                            nothing more
+ */
+:root {
+  color-scheme: light;
+
+  --bg: #f6f6f4;
+  --surface: #ffffff;
+  --surface-sunken: #eceef0;
+  --fg: #1a1c1e;
+  --muted: #4b525a;
+  --line: #d3d7dc;
+  --line-strong: #6c737c;
+
+  --accent: #0b5aa6;
+  --accent-fg: #ffffff;
+  --accent-soft: #e2edf8;
+  --ok: #00664c;
+  --ok-soft: #dff1ea;
+  --danger: #a83a00;
+  --danger-soft: #fbe7dc;
+  --caution: #7a5200;
+  --caution-soft: #f8edd3;
+  --session: #8b3a6b;
+  --session-soft: #f7e8f1;
+
+  --added-bg: #e1f1ea;
+  --removed-bg: #f9e5db;
+
+  --focus: #0b5aa6;
+  --focus-width: 3px;
+
+  --font-text: "Atkinson Hyperlegible Next", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-code: "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --step--1: 0.875rem;
+  --step-0: 1rem;
+  --step-1: 1.2rem;
+  --step-2: 1.5rem;
+  --step-3: 2rem;
+  --leading: 1.55;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --bg: #121416;
+    --surface: #1b1e21;
+    --surface-sunken: #24282c;
+    --fg: #eceef0;
+    --muted: #b1b9c2;
+    --line: #3a4047;
+    --line-strong: #8d959e;
+
+    --accent: #8cc4f5;
+    --accent-fg: #0b1a29;
+    --accent-soft: #1c2c3b;
+    --ok: #63d3ad;
+    --ok-soft: #16302a;
+    --danger: #ffa06e;
+    --danger-soft: #3a2218;
+    --caution: #f2c14e;
+    --caution-soft: #332810;
+    --session: #eaa6cf;
+    --session-soft: #3a2433;
+
+    --added-bg: #17322a;
+    --removed-bg: #3a2218;
+
+    --focus: #8cc4f5;
+  }
+}
+
+/* More contrast on request: stronger lines, and muted text as strong as body text. */
+@media (prefers-contrast: more) {
+  :root {
+    --muted: var(--fg);
+    --line: var(--line-strong);
+    --focus-width: 4px;
+  }
+}

@@ -1,0 +1,14 @@
+# Git's system config in the Python runtime image.
+#
+# Mounted repositories belong to you, and the executor runs as user 10001, so git
+# would refuse them as owned by someone else. A repository's own config outranks this
+# file; the image's GIT_CONFIG_* environment outranks the repository's, and carries
+# the same settings, so they hold for every git process unless a script clears that
+# environment, when this file still gives `safe.directory`.
+#
+[safe]
+	directory = *
+[core]
+	fsmonitor = false
+	hooksPath = /dev/null
+	pager = cat

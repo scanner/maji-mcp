@@ -1,0 +1,23 @@
+# The runtime libraries: what a script in the Python runtime can import, beyond the
+# standard library. Each one is pinned with its hashes in requirements.txt, resolved
+# from PyPI alone. After changing this list, run `make runtime-lock`, then update the
+# library's entry in `src/maji_mcp/common/runtime_libraries.py`, which agents read and
+# a test checks against the lock.
+#
+GitPython
+PyYAML
+Jinja2
+markdown-it-py
+Pygments
+tree-sitter
+tree-sitter-javascript
+tree-sitter-typescript
+tree-sitter-go
+tree-sitter-rust
+tree-sitter-ruby
+tree-sitter-perl
+unidiff
+pathspec
+RapidFuzz
+duckdb
+pandas

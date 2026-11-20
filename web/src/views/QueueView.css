@@ -1,0 +1,55 @@
+.queue {
+  display: grid;
+  gap: var(--space-4);
+}
+h1:focus {
+  outline: none;
+}
+.layout {
+  display: grid;
+  grid-template-columns: minmax(18rem, 26rem) minmax(0, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+.lanes {
+  display: grid;
+  gap: var(--space-4);
+}
+.lanes section {
+  display: grid;
+  gap: var(--space-2);
+}
+.count {
+  color: var(--muted);
+  font-weight: 400;
+}
+.disclose {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+.now {
+  min-width: 0;
+}
+.clear,
+.failed {
+  padding: var(--space-5);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+/* A narrow window is usually a small one kept open beside others, so the page's own
+   headings take less of it. */
+.narrow .layout {
+  grid-template-columns: 1fr;
+}
+.narrow h1 {
+  font-size: var(--step-2);
+}
+.narrow h2 {
+  font-size: var(--step-1);
+}

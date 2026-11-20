@@ -1,0 +1,2304 @@
+openapi: 3.1.0
+info:
+  title: maji-mcp control plane
+  version: 0.1.0
+  description: |
+    The REST API every client of the decision queue is built on: the web app first, then
+    the Emacs client, a CLI and a native app. It is the contract: written first,
+    reviewed, and the Starlette implementation is tested against it
+    (`docs/design/control-plane.md`, "Interfaces"). What a client shows from it, and how
+    deciding works in a client, is in `docs/design/client-rules.md`.
+
+    ## Changes since the first draft
+
+    Agreed (2026-11-08):
+    - **Remembering an approval.** An approval can carry `remember`: one of the
+      patterns the broker computed for the item, and how long it lasts. It becomes a
+      grant, so later requests that fit the pattern need no decision.
+    - **`GET /resources`:** the services, repositories and records your agents reach,
+      with the grants that cover each.
+    - **A configurable origin,** to reach the control plane from another device over
+      HTTPS (`docs/design/deployment.md`, option (c)).
+    - **Bring-up with one touch,** using `setup_needed` on `/health`, and **recovery
+      codes** shown once with the first passkey.
+    - **Instance ids from the host's name,** at the front of item ids.
+    - **Approving every part at once** is the default; parts are for refusing some.
+    - **Content the requester wrote is never remembered,** for now. Patterns cover
+      reads, mounts and structural changes, and a write of content comes to the queue
+      each time. To revisit once there is a way to recognize edits of the same kind.
+    - **Finding and revoking grants in bulk:** counts in `GET /grants/groups`, filters
+      and fuzzy search on `GET /grants`, and `POST /grants/revocations`.
+
+    Agreed later the same day, found while building the control plane:
+    - **`Pattern.resource`,** so grants can be found and grouped by what they cover.
+    - **`Grant.decision` may be null,** for a grant made at setup rather than by a
+      decision.
+    - **`Requester.run`,** so a grant remembered for a run can be held to that run.
+    - **The guard's refusals, declared on every route:** 421 for a wrong `Host`, 403
+      for a wrong or missing `Origin`, and 401 for an unknown bearer token.
+    - **A recovery code works at any time,** not only once every passkey is lost,
+      since the control plane can't tell; it says so, and a new passkey raises
+      `passkey.added`.
+    - **A remembered approval must be one that can lapse:** only approving actions
+      carry `remember`, and only for a run or session the requester named, or an
+      `until` still to come.
+
+    Agreed 2026-11-09:
+    - **What risk means.** The broker computes an item's risk from what the request
+      would do, never from what the agent says. High risk has five reasons, and a
+      high-risk item names its own in `risk_reasons` (`docs/design/control-plane.md`,
+      "What makes an item high risk").
+    - **A high-risk decision takes the passkey even in an unlocked tab.**
+    - **High risk is a finding, not a verdict.** Each reason says whether the broker
+      found it or only suspects it, and points at its evidence on the item. No
+      reason means none of the five was found, not that the item is safe.
+
+    Agreed 2026-11-10:
+    - **A session's grant can end at a time.** `Remember.until` with `lasts: session`
+      ends the grant then, if the session hasn't ended first. It covers no more than
+      the session, so an unlocked tab can decide it.
+    - **A grant to mount a folder covers everything in it.**
+    - **You can let a requester ask again for mounts you refused**
+      (`POST /items/{item_id}/ask-again`), from a signed-in browser only.
+    - **A sixth reason for high risk, `secrets_in_reach`:** a path to mount is a file
+      named the way secrets are kept, asked for by name. Always suspected, since it
+      goes by names. A mount of a folder leaves such files out, and the item says
+      which, without the reason.
+    - **`Requester.client`:** what the agent's app said it is, shown and never
+      trusted.
+
+    ## What is here, and what isn't
+
+    Version 0.1 covers the queue (ahead, now and behind), deciding items, policy,
+    grants, connections, passkeys and sign-in, and a live event stream. Routes for
+    the skill library, packs and packaging jobs are planned
+    (`docs/roadmap.md`).
+
+    Requesters and the broker never use this API. The gateway (`submit`, `status`,
+    `withdraw`) and the broker (creating items, reading decisions) reach the control
+    plane over internal JSON-RPC on Unix sockets, which have no method that decides
+    anything. Decisions enter only through this listener.
+
+    ## Where it is served
+
+    At an origin set in configuration, which is also the relying party ID's source.
+    The default is `http://localhost:<port>`, on the loopback interface only. The name
+    has to be `localhost`, not `127.0.0.1`: WebAuthn refuses an IP address as a
+    relying party ID, and allows plain HTTP only for `localhost`. Requests whose
+    `Host` isn't the configured one are refused, against DNS rebinding.
+
+    To reach it from another device, such as an iPad, it is served over HTTPS under a
+    name the device trusts a certificate for, and that name is the relying party ID
+    (`docs/design/deployment.md`, option (c)). WebAuthn needs a secure context, so a
+    certificate the device doesn't trust stops passkeys working. Passkeys registered
+    under `localhost` don't carry over to the name; each device registers its own, or
+    uses a phone beside it through WebAuthn's cross-device sign-in, which needs nothing
+    from this API. The session cookie is then also `Secure`.
+
+    ## Signing in
+
+    - **The web app signs in with a passkey** (`POST /session`) and gets a session
+      cookie: `HttpOnly`, `SameSite=Strict`, eight hours, and `Secure` when served
+      over HTTPS.
+    - **Other clients use a bearer token** made by `maji-setup token --client <name>`.
+      The control plane keeps only its hash.
+    - **Every request that isn't a GET must carry an `Origin` equal to the control
+      plane's own,** or none at all for a bearer-token client. With the cookie's
+      `SameSite=Strict`, that keeps other sites from acting through your browser.
+
+    ## Deciding
+
+    A session or a token is enough to read the queue, and to narrow access: revoke a
+    grant, disconnect a service, sign out. **Anything that widens access needs proof
+    that you were present: a passkey assertion.** That covers every decision, signing
+    in, and changing the passkeys themselves. Operations that need proof say which, in
+    `x-maji-proof`.
+
+    A token alone never decides, because anything running as you can read a token
+    file, and that includes an agent's shell. An agent that read injected text could
+    otherwise approve its own request. Decisions made by policy, such as a tick you
+    asked for, are made inside the control plane and never come through here.
+
+    A decision takes two calls:
+    1. `POST /decisions/challenge` with what you chose. The control plane checks that
+       each item is still as you saw it, and returns a challenge bound to exactly
+       those choices.
+    2. The client asks the authenticator to sign the challenge, then sends the
+       assertion to `POST /decisions`. One assertion covers a whole batch.
+
+    The assertion is accepted only if:
+    - `clientDataJSON.origin` is exactly the control plane's origin. Any page on any
+      `localhost` port can ask for a passkey registered to `localhost`, so the origin
+      is what tells this client apart from another local page.
+    - its type is `webauthn.get`, and its challenge is the one issued, unused and
+      under five minutes old
+    - the relying party ID hash is SHA-256 of `localhost`, and the user-present and
+      user-verified flags are set
+    - the signature verifies against a registered passkey, and its counter, if the
+      authenticator keeps one, has gone up
+
+    ### Deciding in an unlocked tab
+
+    A passkey prompt on every decision is too much for a queue worked through in one
+    sitting. So, as a password manager stays unlocked while you use it, one assertion
+    can unlock deciding in a browser tab until the tab has gone unused for a while:
+    1. The tab makes an ECDSA P-256 key pair with WebCrypto that can't be exported,
+       and keeps it only in memory, so it is gone when the tab reloads or closes.
+    2. `POST /unlocks/options` with the public key returns a challenge bound to the
+       key and the idle limit; the passkey signs it, and `POST /unlocks` records the
+       unlock for that tab's session.
+    3. Each decision then takes the usual challenge, signed by the tab's key instead
+       of the authenticator, and sent to `POST /decisions` as `unlock`.
+
+    An unlock holds only for the session that made it, and only through its cookie;
+    a token never unlocks anything. It locks once it has gone unused for its idle
+    limit (`POST /unlocks/{unlock_id}/active` counts the tab as in use), when the tab
+    locks it, or when the session ends. Some decisions always need the passkey:
+    - one that lasts beyond its run or session, remembering an approval until a time
+      or permanently
+    - connecting a service
+    - deciding a high-risk item
+
+    What it gives up: while a tab is unlocked, a decision proves you were at the
+    queue recently, not at that decision. Script running in that tab could decide
+    until it locks; a stolen cookie alone could not, since the key never leaves the
+    tab.
+
+    ## The decision hash
+
+    Both hashes are defined here exactly, because an instance that owns an item has
+    to verify a decision made on another machine (`docs/design/planned/sharing.md`,
+    "One queue across your machines"). A client can compute them too, to check that
+    the challenge matches what it showed you.
+
+    - **A decision's hash** is SHA-256 over the RFC 8785 canonical JSON of the
+      object below, written `sha256:<hex>`. Optional fields that weren't chosen are
+      left out, never sent as `null`.
+
+          {"item": <item id>, "content_hash": <the item's content_hash>,
+           "action": <action id>, "parts": {...}, "answer": {...},
+           "remember": {...}, "note": <text>, "credential_fingerprint": <sha256:...>}
+
+    - **The challenge** is the 32 raw bytes of SHA-256 over the canonical JSON of
+      `{"nonce": <the nonce issued>, "decisions": [<decision hashes, in order>]}`.
+    - **An unlock's challenge** is the 32 raw bytes of SHA-256 over the canonical
+      JSON of `{"nonce": <the nonce issued>, "unlock": <the key's RFC 7638
+      thumbprint>, "idle_seconds": <the idle limit>}`. An unlocked tab signs a
+      decision's challenge with ECDSA P-256 and SHA-256, as WebCrypto does, and sends
+      the signature as r and s side by side, base64url.
+
+    `x-maji-example` under `DecisionChoice` works one through; the tests recompute it.
+
+    ## Limits of the default deployment
+
+    - **The first passkey is registered with a setup code,** which works only while
+      no passkey exists, once, for ten minutes. `make up` waits for the
+      control plane, and if `/health` says setup is needed, opens your browser at the
+      setup page with the code in the URL's fragment, which a browser never sends to
+      the server. One touch registers the passkey, and the page removes the code from
+      its history. With no browser to open, it prints the URL instead. Anything
+      running as you could use the code first, so the client lists every passkey, and
+      a new one raises a `passkey.added` event that clients show.
+    - **Resetting.** Anything running as you can delete the control plane's data and
+      start again, losing that instance's history. Nothing in the design prevents it;
+      it can only make it visible. Recovery codes, shown once with the
+      first passkey and kept in a password manager, register a new passkey after all
+      are lost, so a wipe is rarely needed.
+    - **An authenticator shows only the site asking, `localhost`, not what you're
+      approving.** What you sign is only as good as the client's rendering of the
+      item.
+    - **A hardware key can be asked to sign directly, outside a browser,** where no
+      origin is checked. A platform passkey (Touch ID) can't. Prefer platform
+      passkeys, and touch a hardware key only when the web app asked.
+    - **Under the default deployment, your user owns the Docker daemon,** so the
+      control plane's database can be reached with `docker exec`
+      (`docs/design/deployment.md`).
+
+servers:
+  - url: http://localhost:{port}/api/v0
+    description: The default, on the loopback interface.
+    variables:
+      port:
+        default: "8767"
+  - url: https://{host}/api/v0
+    description: For reaching it from another device, over HTTPS.
+    variables:
+      host:
+        default: maji.example.net
+
+security:
+  - session: []
+  - clientToken: []
+
+tags:
+  - name: items
+    description: The queue, in three lanes. Ahead is what's waiting, now is the next
+      item, behind is what's been decided.
+  - name: decisions
+  - name: policy
+  - name: grants
+  - name: connections
+    description: maji-mcp's own credentials for the services it reaches.
+  - name: passkeys
+  - name: session
+  - name: unlocks
+    description: Deciding without a passkey prompt in a tab your passkey unlocked,
+      until it goes unused for a while.
+  - name: events
+
+paths:
+  /items:
+    get:
+      tags: [items]
+      operationId: listItems
+      summary: List items in one lane, ahead or behind
+      description: |
+        Ahead is ordered by thread, then dependency and priority, with items blocking
+        an agent first. Behind is ordered by when each item was decided, newest first.
+      parameters:
+        - name: lane
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [ahead, behind]
+        - name: thread
+          in: query
+          schema: {type: string}
+        - name: kind
+          in: query
+          schema: {$ref: "#/components/schemas/ItemKind"}
+        - name: blocking
+          in: query
+          description: Only items holding up an agent.
+          schema: {type: boolean}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of items
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ItemPage"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /items/next:
+    get:
+      tags: [items]
+      operationId: nextItem
+      summary: The item in front of you, the first one ahead
+      responses:
+        "200":
+          description: The next item
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Item"}
+        "204":
+          description: Nothing is waiting
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /items/{item_id}:
+    get:
+      tags: [items]
+      operationId: getItem
+      summary: One item, with its facts, claim, notes, actions and any decision
+      parameters:
+        - $ref: "#/components/parameters/ItemId"
+      responses:
+        "200":
+          description: The item
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Item"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /items/{item_id}/ask-again:
+    post:
+      tags: [items]
+      operationId: letAskAgain
+      summary: Let the requester ask again for mounts you refused
+      description: |
+        After you refuse a path an agent asked to mount, the broker refuses its
+        reruns asking for that path in the same session, so an agent that retries
+        can't keep putting it to you. Once you've told the agent more, this lets its
+        next run ask again, as a new item. It grants nothing, and the refusal stays
+        in the item's history. Only a browser signed in with a passkey can do it; an
+        agent holding a token mustn't lift its own refusal. Doing it twice changes
+        nothing.
+      security:
+        - session: []
+      x-maji-access: none
+      parameters:
+        - $ref: "#/components/parameters/ItemId"
+      responses:
+        "200":
+          description: The item, with `ask_again`
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Item"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/WrongOrigin"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+        "422": {$ref: "#/components/responses/Invalid"}
+
+  /resources:
+    get:
+      tags: [grants]
+      operationId: listResources
+      summary: What your agents reach, and what covers it
+      description: |
+        The services, paths and records agents have read or changed, each with
+        the grants that cover it and when it was last used. It is the run log seen
+        from the resources' side, so you can see the web of what's being reached
+        before deciding to widen it.
+      parameters:
+        - name: kind
+          in: query
+          schema:
+            type: string
+            enum: [service, path, record]
+        - name: principal
+          in: query
+          schema: {type: string}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of resources
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [resources]
+                properties:
+                  resources:
+                    type: array
+                    items: {$ref: "#/components/schemas/ResourceUse"}
+                  next_cursor: {type: [string, "null"]}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /decisions/challenge:
+    post:
+      tags: [decisions]
+      operationId: challengeDecisions
+      summary: Get a challenge bound to one or more decisions
+      description: |
+        Checks each choice against its item: the item is waiting (or, for a
+        reconsideration, decided), its `content_hash` is the one given, the action is
+        one the item offers, and the action's inputs are complete. Nothing is decided
+        yet. The challenge can be used once, within five minutes.
+      x-maji-access: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decisions]
+              properties:
+                decisions:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: {$ref: "#/components/schemas/DecisionChoice"}
+      responses:
+        "200":
+          description: The challenge, and the options to pass to the authenticator
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DecisionChallenge"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "403": {$ref: "#/components/responses/WrongOrigin"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /decisions:
+    post:
+      tags: [decisions]
+      operationId: decide
+      summary: Make the decisions a challenge was issued for
+      description: |
+        Verifies the assertion (see "Deciding" above), checks each item again, and
+        records the decisions. All of them are recorded or none are. The broker
+        applies each one; a changeset whose target has changed since goes back to its
+        requester as a conflict.
+      x-maji-access: widens
+      x-maji-proof: assertion or unlocked-tab
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id]
+              oneOf:
+                - required: [assertion]
+                - required: [unlock]
+              properties:
+                challenge_id: {type: string}
+                assertion: {$ref: "#/components/schemas/AssertionResponse"}
+                unlock:
+                  description: |
+                    The challenge signed by an unlocked tab's key, in place of an
+                    assertion. Refused once the tab has locked, and for a decision
+                    that lasts beyond its run or session.
+                  type: object
+                  required: [id, signature]
+                  properties:
+                    id: {type: string}
+                    signature: {type: string, contentEncoding: base64url}
+                secrets:
+                  description: |
+                    A key pasted into a Connect item, by item id: 1 to 4096 printable
+                    characters. Its SHA-256 must equal the `credential_fingerprint`
+                    in the signed choice, or the request is refused with 422. The
+                    control plane holds the key in memory until the broker takes it,
+                    for 10 minutes at most, and never records, logs or returns it.
+                    A key the broker never takes, as when the control plane
+                    restarts first, is lost, and the decision's outcome says to
+                    connect the service again.
+                  type: object
+                  additionalProperties: {type: string, writeOnly: true}
+      responses:
+        "201":
+          description: The decisions, as recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [decisions]
+                properties:
+                  decisions:
+                    type: array
+                    items: {$ref: "#/components/schemas/Decision"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403":
+          description: |
+            The assertion or signature didn't verify, or the Origin was wrong. For an
+            unlocked tab, `data.reason` is `locked` once the tab has locked, and
+            `needs_passkey` for a decision that lasts beyond its run or session.
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "410":
+          description: The challenge was used already, or expired
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+    get:
+      tags: [decisions]
+      operationId: listDecisions
+      summary: Decision records, newest first
+      description: The append-only history, including policy's decisions.
+      parameters:
+        - name: item_id
+          in: query
+          schema: {type: string}
+        - name: by
+          in: query
+          schema:
+            type: string
+            enum: [you, policy]
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of decisions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [decisions]
+                properties:
+                  decisions:
+                    type: array
+                    items: {$ref: "#/components/schemas/Decision"}
+                  next_cursor: {type: [string, "null"]}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /unlocks/options:
+    post:
+      tags: [unlocks]
+      operationId: unlockOptions
+      summary: Get a challenge for unlocking deciding in this tab
+      description: |
+        Binds a challenge to the tab's public key and the idle limit. Only a browser
+        signed in with a passkey can unlock; a token is refused.
+      x-maji-access: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key: {$ref: "#/components/schemas/TabKey"}
+      responses:
+        "200":
+          description: The challenge, and the options to pass to the authenticator
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [challenge_id, nonce, idle_seconds, public_key]
+                properties:
+                  challenge_id: {type: string}
+                  nonce: {type: string}
+                  idle_seconds: {type: integer}
+                  public_key:
+                    description: "`PublicKeyCredentialRequestOptions` for the authenticator."
+                    type: object
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403":
+          description: Not a signed-in browser, or the Origin was wrong
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /unlocks:
+    post:
+      tags: [unlocks]
+      operationId: unlock
+      summary: Unlock deciding in this tab, with a passkey
+      x-maji-access: widens
+      x-maji-proof: assertion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id, assertion]
+              properties:
+                challenge_id: {type: string}
+                assertion: {$ref: "#/components/schemas/AssertionResponse"}
+      responses:
+        "201":
+          description: The tab is unlocked
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Unlock"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403":
+          description: |
+            The assertion didn't verify, the challenge was another session's, it isn't
+            a signed-in browser, or the Origin was wrong
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "410":
+          description: The challenge was used already, or expired
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /unlocks/{unlock_id}/active:
+    post:
+      tags: [unlocks]
+      operationId: unlockActive
+      summary: Count an unlocked tab as in use now
+      description: |
+        The tab sends this at most once a minute while you are using it, so it stays
+        unlocked. It never reopens a tab that has locked.
+      x-maji-access: none
+      parameters:
+        - {name: unlock_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "204": {description: Still unlocked}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403":
+          description: The tab has locked (`data.reason` is `locked`), or the Origin was wrong
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /unlocks/{unlock_id}:
+    delete:
+      tags: [unlocks]
+      operationId: lock
+      summary: Lock deciding in a tab
+      x-maji-access: narrows
+      parameters:
+        - {name: unlock_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "204": {description: "Locked, or it was already"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403":
+          description: Not a signed-in browser, or the Origin was wrong
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /decisions/{decision_id}:
+    get:
+      tags: [decisions]
+      operationId: getDecision
+      summary: One decision record, with its signature
+      parameters:
+        - name: decision_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: The decision
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Decision"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /policy:
+    get:
+      tags: [policy]
+      operationId: getPolicy
+      summary: The rules that decide low-risk kinds without you
+      responses:
+        "200":
+          description: The rules in force
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rules]
+                properties:
+                  rules:
+                    type: array
+                    items: {$ref: "#/components/schemas/PolicyRule"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /policy/proposals:
+    post:
+      tags: [policy]
+      operationId: proposePolicy
+      summary: Propose adding, changing or removing a rule
+      description: |
+        A change to policy is itself a queue item. This creates one, which is
+        decided like any other.
+      x-maji-access: proposes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [change]
+              properties:
+                change:
+                  type: string
+                  enum: [add, replace, remove]
+                rule: {$ref: "#/components/schemas/PolicyRule"}
+                rule_id: {type: string}
+                reason: {type: string, maxLength: 2000}
+      responses:
+        "201":
+          description: The policy change item
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Item"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "403": {$ref: "#/components/responses/WrongOrigin"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /grants:
+    get:
+      tags: [grants]
+      operationId: listGrants
+      summary: Who may use which stubs and repositories, and until when
+      parameters:
+        - name: principal
+          in: query
+          schema: {type: string}
+        - name: active
+          in: query
+          description: Only grants that haven't lapsed or been revoked.
+          schema: {type: boolean, default: true}
+        - name: resource
+          in: query
+          description: Only grants covering this resource, such as `~/src/api`.
+          schema: {type: string}
+        - name: access
+          in: query
+          schema: {$ref: "#/components/schemas/Access"}
+        - name: lasts
+          in: query
+          schema: {$ref: "#/components/schemas/Lasts"}
+        - name: session
+          in: query
+          description: |
+            Only grants held for this session, by its key: those that last for the
+            session. A grant made in it that lasts longer isn't held by it.
+          schema: {type: string}
+        - $ref: "#/components/parameters/Fuzzy"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: The grants
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [grants]
+                properties:
+                  grants:
+                    type: array
+                    items: {$ref: "#/components/schemas/Grant"}
+                  next_cursor: {type: [string, "null"]}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /grants/groups:
+    get:
+      tags: [grants]
+      operationId: groupGrants
+      summary: Grants counted by resource, principal, access, duration or session
+      description: |
+        A thousand grants are hard to read one by one. This counts them along one
+        dimension, so you can see where permissions have built up, then list that
+        group with `GET /grants`, or revoke it. By session, the grants of a session
+        that has ended can be found and revoked together.
+      parameters:
+        - name: by
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [resource, principal, access, lasts, session]
+        - name: active
+          in: query
+          schema: {type: boolean, default: true}
+        - $ref: "#/components/parameters/Fuzzy"
+      responses:
+        "200":
+          description: The groups, largest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groups]
+                properties:
+                  groups:
+                    type: array
+                    items: {$ref: "#/components/schemas/GrantGroup"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /grants/revocations:
+    post:
+      tags: [grants]
+      operationId: revokeGrants
+      summary: Revoke many grants at once
+      description: |
+        Revokes the grants listed, or every active grant that fits a filter, without
+        waiting for an agent to use them. Each is recorded in history as its own
+        revocation.
+      x-maji-access: narrows
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                grant_ids:
+                  type: array
+                  items: {type: string}
+                filter:
+                  type: object
+                  properties:
+                    principal: {type: string}
+                    resource: {type: string}
+                    access: {$ref: "#/components/schemas/Access"}
+                    lasts: {$ref: "#/components/schemas/Lasts"}
+                    session: {type: string}
+      responses:
+        "200":
+          description: How many were revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revoked]
+                properties:
+                  revoked: {type: integer}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "403": {$ref: "#/components/responses/WrongOrigin"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /grants/{grant_id}:
+    delete:
+      tags: [grants]
+      operationId: revokeGrant
+      summary: Revoke a grant
+      description: Recorded in history as a decision on top of the grant's own.
+      x-maji-access: narrows
+      parameters:
+        - name: grant_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "204":
+          description: Revoked
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "403": {$ref: "#/components/responses/WrongOrigin"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /connections:
+    get:
+      tags: [connections]
+      operationId: listConnections
+      summary: The services maji-mcp can hold a key for, and which it holds
+      description: |
+        Each service the broker can call with a key, as the broker last reported it,
+        and whether the broker holds a key for it. Empty until the broker has
+        reported. A key's value never appears here, only its fingerprint.
+      responses:
+        "200":
+          description: The connections
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [connections]
+                properties:
+                  connections:
+                    type: array
+                    items: {$ref: "#/components/schemas/Connection"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /connections/{service}/requests:
+    post:
+      tags: [connections]
+      operationId: requestConnection
+      summary: Ask to connect a service ahead of time
+      description: |
+        Creates the same "Connect" item a stub raises when its service has no
+        connection, or, for a service already connected, one that replaces its key.
+        You then decide it, pasting a key. A service has one Connect item waiting at
+        most, so a Connect item already waiting is returned instead of a second.
+      x-maji-access: proposes
+      parameters:
+        - $ref: "#/components/parameters/Service"
+      responses:
+        "200":
+          description: The Connect item already waiting
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Item"}
+        "201":
+          description: The new Connect item
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Item"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "403": {$ref: "#/components/responses/WrongOrigin"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /connections/{service}:
+    delete:
+      tags: [connections]
+      operationId: disconnect
+      summary: Disconnect a service
+      description: |
+        Revokes its tokens at the provider where the provider supports that, and
+        deletes them. Every stub that used the connection fails from then on.
+      x-maji-access: narrows
+      parameters:
+        - $ref: "#/components/parameters/Service"
+      responses:
+        "204":
+          description: Disconnected
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "403": {$ref: "#/components/responses/WrongOrigin"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /oauth/callback:
+    get:
+      tags: [connections]
+      operationId: oauthCallback
+      summary: Where a provider sends you back after signing in
+      description: |
+        Passes the code to the broker's OAuth client, and redirects to the Connect
+        item. `state` is single-use and bound to that item; any other is refused.
+      security: []
+      x-maji-access: none
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: {type: string}
+        - name: state
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "303":
+          description: Back to the item in the web app
+        "400":
+          description: Unknown, used or expired `state`
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /passkeys:
+    get:
+      tags: [passkeys]
+      operationId: listPasskeys
+      summary: The passkeys whose assertions this instance accepts
+      responses:
+        "200":
+          description: The passkeys
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [passkeys]
+                properties:
+                  passkeys:
+                    type: array
+                    items: {$ref: "#/components/schemas/Passkey"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+    post:
+      tags: [passkeys]
+      operationId: registerPasskey
+      summary: Register a passkey
+      description: |
+        The first passkey needs the setup code. Every later one needs a session
+        signed in within the last five minutes, so only someone holding a registered
+        passkey can add another. A recovery code also adds one, once, at any
+        time, so it needs keeping as safely as a passkey; the new passkey raises
+        `passkey.added`, which clients show.
+      security:
+        - session: []
+        - {}
+      x-maji-access: widens
+      x-maji-proof: setup-code, recovery-code or fresh-session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [registration_id, credential]
+              properties:
+                registration_id: {type: string}
+                setup_code: {type: string, writeOnly: true}
+                recovery_code: {type: string, writeOnly: true}
+                credential: {$ref: "#/components/schemas/RegistrationResponse"}
+      responses:
+        "201":
+          description: The passkey
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: "#/components/schemas/Passkey"}
+                  - type: object
+                    properties:
+                      recovery_codes:
+                        description: |
+                          With the first passkey only, ten single-use
+                          codes, shown this once and never stored in a form that can
+                          be read back.
+                        type: array
+                        items: {type: string}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403":
+          description: The setup code is wrong or spent, or the session isn't fresh
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /passkeys/registration/options:
+    post:
+      tags: [passkeys]
+      operationId: passkeyRegistrationOptions
+      summary: Get the options to create a passkey with
+      security:
+        - session: []
+        - {}
+      x-maji-access: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  description: Shown in the list of passkeys, such as "laptop Touch ID".
+                  type: string
+                  maxLength: 100
+      responses:
+        "200":
+          description: |
+            The registration id, and `PublicKeyCredentialCreationOptions` with user
+            verification required and no attestation asked for
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [registration_id, public_key]
+                properties:
+                  registration_id: {type: string}
+                  public_key: {type: object}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/WrongOrigin"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /passkeys/{passkey_id}:
+    delete:
+      tags: [passkeys]
+      operationId: removePasskey
+      summary: Remove a passkey
+      description: |
+        Needs a fresh session, like adding one, so that nothing without a passkey can
+        remove yours and register its own through the setup code. The last passkey
+        can't be removed.
+      security:
+        - session: []
+      x-maji-access: widens
+      x-maji-proof: fresh-session
+      parameters:
+        - name: passkey_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "204":
+          description: Removed
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403":
+          description: The session isn't fresh
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "409":
+          description: It is the last passkey
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /session/options:
+    post:
+      tags: [session]
+      operationId: sessionOptions
+      summary: Get a challenge to sign in with
+      security: []
+      x-maji-access: none
+      responses:
+        "200":
+          description: The challenge id, and `PublicKeyCredentialRequestOptions`
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [challenge_id, public_key]
+                properties:
+                  challenge_id: {type: string}
+                  public_key: {type: object}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/WrongOrigin"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /session:
+    post:
+      tags: [session]
+      operationId: signIn
+      summary: Sign in with a passkey
+      security: []
+      x-maji-access: widens
+      x-maji-proof: assertion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id, assertion]
+              properties:
+                challenge_id: {type: string}
+                assertion: {$ref: "#/components/schemas/AssertionResponse"}
+      responses:
+        "204":
+          description: Signed in; the response sets the session cookie
+          headers:
+            Set-Cookie:
+              schema: {type: string}
+        "403":
+          description: The assertion didn't verify
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+    delete:
+      tags: [session]
+      operationId: signOut
+      summary: Sign out
+      security:
+        - session: []
+      x-maji-access: narrows
+      responses:
+        "204":
+          description: Signed out
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/WrongOrigin"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /events:
+    get:
+      tags: [events]
+      operationId: events
+      summary: Live updates, as server-sent events
+      description: |
+        Each event's `id` is a position in the stream. A client that reconnects with
+        `Last-Event-ID` gets every event after it, for up to a day; older than that,
+        it gets `resync` and lists the items again.
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          schema: {type: string}
+      responses:
+        "200":
+          description: The stream
+          content:
+            text/event-stream:
+              schema: {$ref: "#/components/schemas/Event"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+  /health:
+    get:
+      operationId: health
+      summary: Whether the control plane is up
+      security: []
+      responses:
+        "200":
+          description: Up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, instance, setup_needed]
+                properties:
+                  ok: {type: boolean}
+                  instance: {$ref: "#/components/schemas/InstanceIdentifier"}
+                  setup_needed:
+                    description: |
+                      No passkey is registered yet, so `make up` opens the
+                      setup page. It says nothing else about the instance's state.
+                    type: boolean
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "421": {$ref: "#/components/responses/Misdirected"}
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: maji_session
+      description: Set by `POST /session` after a passkey sign-in.
+    clientToken:
+      type: http
+      scheme: bearer
+      description: Made by `maji-setup token --client <name>`.
+
+  parameters:
+    ItemId:
+      name: item_id
+      in: path
+      required: true
+      schema: {$ref: "#/components/schemas/ItemIdentifier"}
+    Service:
+      name: service
+      in: path
+      required: true
+      description: The service's name in its service definition, such as `sentry`.
+      schema: {type: string, pattern: "^[a-z][a-z0-9_]{0,31}$"}
+    Cursor:
+      name: cursor
+      in: query
+      description: From the previous page's `next_cursor`.
+      schema: {type: string}
+    Fuzzy:
+      name: q
+      in: query
+      description: |
+        A fuzzy search, as in fzf: the query's characters appear in order, not
+        necessarily together, in a grant's pattern summary, resource or principal, so
+        a fragment you remember is enough. Results are ranked by how well they match,
+        and each carries where it matched, so a client can highlight it.
+      schema: {type: string, maxLength: 200}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+
+  responses:
+    Misdirected:
+      description: |
+        The `Host` isn't the control plane's configured one, as a DNS rebinding
+        attack would send. Refused before any route sees it.
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+    WrongOrigin:
+      description: |
+        A request that isn't a GET, made without a bearer token, whose `Origin` is
+        missing or isn't the control plane's own. Refused before any route sees it.
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+    Unauthorized:
+      description: No valid session or token, or a bearer token it doesn't know
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+    NotFound:
+      description: No such item, or not visible to you
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+    Conflict:
+      description: |
+        An item changed since you saw it, or was decided, withdrawn or expired.
+        `data` gives each such item's id, state and current `content_hash`.
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+    Invalid:
+      description: The request doesn't fit the item, such as an action it doesn't offer
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+
+  schemas:
+    Problem:
+      description: RFC 9457 problem details, with maji-mcp's error code.
+      type: object
+      required: [title, status, code]
+      properties:
+        type: {type: string}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        code:
+          description: One of the codes in `docs/design/server-contract.md` A2, such as `conflict`.
+          type: string
+        data: {}
+
+    InstanceIdentifier:
+      description: |
+        The host's name when the instance was created: its first label, in lower
+        case, such as `studio-mac` for `studio-mac.example.net`. A second instance on
+        the same host adds `-2`, a third `-3`. It is fixed once made, because it goes
+        into item ids and so into signed hashes; renaming the host later leaves it
+        alone. A container sees its own hostname, not the host's, so `make up`
+        records the host's on the first run.
+      type: string
+      pattern: "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+
+    ItemIdentifier:
+      description: |
+        The instance that owns the item, a hyphen, then a ULID in lower case: the
+        last 26 characters. The ULID alone keeps ids unique, and sorts them by time
+        within an instance; the prefix says where an item came from once items
+        replicate between a persona's instances.
+      type: string
+      pattern: "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?-[0-9a-hjkmnp-tv-z]{26}$"
+
+    Hash:
+      type: string
+      pattern: "^sha256:[0-9a-f]{64}$"
+
+    ItemKind:
+      type: string
+      enum:
+        - changeset
+        - run_candidate
+        - promote
+        - grant
+        - connect
+        - pack_import
+        - pack_export
+        - policy_change
+        - question
+        - server_registration
+
+    ItemPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/Item"}
+        next_cursor: {type: [string, "null"]}
+
+    Item:
+      type: object
+      x-maji-content-hash-excludes:
+        - state
+        - priority
+        - blocking
+        - notes
+        - actions
+        - expires_at
+        - decision
+        - superseded
+        - ask_again
+        - content_hash
+        - session_name
+      required:
+        - id
+        - kind
+        - state
+        - title
+        - requester
+        - risk
+        - facts
+        - actions
+        - content_hash
+        - created_at
+      properties:
+        id: {$ref: "#/components/schemas/ItemIdentifier"}
+        kind: {$ref: "#/components/schemas/ItemKind"}
+        state:
+          type: string
+          enum: [waiting, decided, expired, withdrawn]
+        title:
+          description: |
+            What the item asks, in a line, for the list. For a question it is the
+            question itself, in the requester's words, which clients label as theirs.
+          type: string
+        subject:
+          description: What the item acts on, such as `org.update_task · emacs-org`.
+          type: string
+        skill:
+          description: |
+            For a promote item, the skill it asks about and the version put to you.
+            Promotions of the same skill share its id, so the control plane can tell
+            the one in effect from those a later promotion replaced.
+          type: object
+          required: [id, version]
+          properties:
+            id:
+              description: Such as `me/local/tick_item`.
+              type: string
+            version: {type: string}
+        connection:
+          description: |
+            For a connect item, the service and how maji-mcp will use the key you
+            paste, from the broker's definition of the service, never from the
+            requester. The content hash covers it, so a key goes only where the item
+            you decided said it would.
+          allOf: [{$ref: "#/components/schemas/Service"}]
+        requester: {$ref: "#/components/schemas/Requester"}
+        session_name:
+          description: |
+            The requester's session, named for people: three words, such as
+            `laughing-sparky-daisy`, picked by a hash of `requester.session`, the
+            same in the gateway's log and every client. A label, never an
+            identity: grants and decisions are bound to the session's key, so
+            clients show the key's first 8 characters beside it. Null without a
+            session. It is worked out from `requester.session`, which the content
+            hash covers, so the hash leaves it out.
+          type: [string, "null"]
+        thread:
+          description: The session's goal, so related items show together.
+          type: [object, "null"]
+          required: [id, goal]
+          properties:
+            id: {type: string}
+            goal: {type: string}
+        priority: {type: integer}
+        risk:
+          description: |
+            What the broker found the request would do. `low`: what policy can
+            decide without you. `medium`: the queue's usual item, such as content
+            the agent wrote, for you to read. `high`: one of the reasons in
+            `risk_reasons`, which a high-risk item always gives. Only `high` is a
+            finding; clients never show `low` or `medium` as safe.
+          type: string
+          enum: [low, medium, high]
+        risk_reasons:
+          description: |
+            Why a high-risk item is high risk, each found or suspected, with its
+            evidence; only a high-risk item has them. Clients show them first, and
+            again where you decide.
+          type: array
+          minItems: 1
+          maxItems: 5
+          items: {$ref: "#/components/schemas/RiskReason"}
+        blocking:
+          description: An agent is waiting on this item to go on.
+          type: boolean
+        coalesced:
+          description: How many requests this item stands for, after merging.
+          type: integer
+          minimum: 1
+        facts:
+          description: What the broker computed. You decide on these.
+          type: array
+          items: {$ref: "#/components/schemas/Fact"}
+        diff: {$ref: "#/components/schemas/Diff"}
+        claim:
+          description: |
+            The requester's own explanation. It comes from an agent that may have read
+            injected text, so it is shown labelled as the requester's, after the diff
+            and facts. For a question it is why the requester asks.
+          type: [string, "null"]
+        words:
+          description: |
+            What you typed that led to the request, passed by a hook. Clients show it
+            behind an icon. It clarifies; it approves nothing.
+          type: [string, "null"]
+        notes:
+          description: Notes on the item, each labelled with who wrote it.
+          type: array
+          items: {$ref: "#/components/schemas/Note"}
+        parts:
+          description: |
+            The separate things one request asks for. For example, when a run asks to
+            mount three repositories, the item lists all three. Approving without
+            `parts` approves them all, the usual case; `parts` is for approving some
+            and refusing others, such as a repository an agent had no need to look
+            through.
+          type: array
+          items: {$ref: "#/components/schemas/Part"}
+        resources:
+          description: |
+            What the request reads or changes, computed by the broker:
+            services, repositories and records, each with its access.
+          type: array
+          items: {$ref: "#/components/schemas/Resource"}
+        patterns:
+          description: |
+            Ways to remember an approval of this item, computed by the broker from
+            the facts, never from the requester's claim. Each says what it would
+            cover, and which recent requests it would have covered. None covers a
+            write of content the requester wrote, which comes to the queue each time.
+          type: array
+          items:
+            allOf:
+              - {$ref: "#/components/schemas/Pattern"}
+              - properties:
+                  access:
+                    enum: [read, mount, structural]
+        choices:
+          description: The answers a question offers, if any.
+          type: array
+          items:
+            type: object
+            required: [id, label]
+            properties:
+              id: {type: string}
+              label: {type: string}
+        actions:
+          description: |
+            The decisions open now: for a waiting item, its kind's actions; for a
+            decided one, the reconsiderations, such as `demote` on the promotion of a
+            skill that is still in effect. A reconsideration names the decision it
+            reconsiders (`DecisionChoice.supersedes`).
+          type: array
+          items: {$ref: "#/components/schemas/Action"}
+        preconditions:
+          description: What must still hold when the decision is applied.
+          type: array
+          items:
+            type: object
+            required: [target, version]
+            properties:
+              target: {type: string}
+              version: {type: string}
+        depends_on:
+          type: array
+          items: {$ref: "#/components/schemas/ItemIdentifier"}
+        content_hash:
+          description: |
+            SHA-256 over the RFC 8785 canonical JSON of the item without the fields in
+            `x-maji-content-hash-excludes`: what you decide on, patterns included. It
+            changes when the item does, such as when another request is merged in, so
+            a decision made on what you saw can't land on something else.
+          allOf: [{$ref: "#/components/schemas/Hash"}]
+        created_at: {type: string, format: date-time}
+        expires_at:
+          description: When an undecided item lapses, and goes back to its requester.
+          type: [string, "null"]
+          format: date-time
+        decision:
+          description: The item's latest decision.
+          oneOf:
+            - {$ref: "#/components/schemas/Decision"}
+            - {type: "null"}
+        superseded:
+          description: |
+            The decision the latest one reconsidered, such as the promotion a demotion
+            took back; null when the latest decision reconsidered none.
+          oneOf:
+            - {$ref: "#/components/schemas/Decision"}
+            - {type: "null"}
+        ask_again:
+          description: |
+            When you let the requester ask again for the mounts this item's decision
+            refused (`POST /items/{item_id}/ask-again`), and who did.
+          type: object
+          required: [at, by]
+          properties:
+            at: {type: string, format: date-time}
+            by: {type: string}
+
+    Requester:
+      type: object
+      required: [principal]
+      properties:
+        principal: {type: string}
+        session: {type: [string, "null"]}
+        run:
+          description: The run that asked, when a script did.
+          type: [string, "null"]
+        machine: {type: [string, "null"]}
+        client:
+          description: |
+            What the agent's app said it is when it connected to the gateway, such
+            as `claude-code` and its version. Self-reported, so clients show it apart
+            from the principal and say, once, that nothing checks it; nothing is
+            decided by it. A separate token for each agent is what tells agents apart.
+          type: object
+          required: [name]
+          properties:
+            name: {type: string, maxLength: 100}
+            version: {type: string, maxLength: 100}
+
+    RiskReason:
+      description: |
+        One reason an item is high risk: a finding about what the request would do,
+        with the evidence for it on the item. It is never a verdict that the item is
+        safe or harmful, and an item without one wasn't found safe: none of the six
+        was found. `code` is one of six:
+        - `data_leaves`: data or a key goes somewhere it hasn't been, such as an
+          export, a key sent to a host for the first time, or write scopes added to a
+          connection
+        - `trust_changes`: something will decide later requests without you, such
+          as promoting a skill, importing a pack, a policy change or a new MCP server
+        - `your_words`: content you wrote is removed or replaced
+        - `addressed_to_ai`: the request carries text addressed to an AI agent
+        - `beyond_the_task`: it reaches past what the session's goal names
+        - `secrets_in_reach`: it would mount a file named the way secrets are kept,
+          asked for by name
+      type: object
+      required: [code, basis, text, evidence]
+      properties:
+        code:
+          type: string
+          enum:
+            - data_leaves
+            - trust_changes
+            - your_words
+            - addressed_to_ai
+            - beyond_the_task
+            - secrets_in_reach
+        basis:
+          description: |
+            `found`: the broker established it from what the request does.
+            `suspected`: it rests on a detector or a judgment, and may be wrong.
+            `addressed_to_ai`, `beyond_the_task` and `secrets_in_reach` are always
+            `suspected`. Clients
+            mark a suspected reason as suspected.
+          type: string
+          enum: [found, suspected]
+        text:
+          description: |
+            Why the evidence matters, such as that a key has never been sent to the
+            host. Clients show the evidence beside it, so it needn't repeat it.
+          type: string
+          maxLength: 300
+        evidence:
+          description: |
+            What on the item the reason rests on, for you to check it against: a
+            fact or a diff line, by its index from 0, or a part, by its id.
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: {$ref: "#/components/schemas/Evidence"}
+
+    Evidence:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [fact]
+          properties:
+            fact: {type: integer, minimum: 0}
+        - type: object
+          additionalProperties: false
+          required: [line]
+          properties:
+            line: {type: integer, minimum: 0}
+        - type: object
+          additionalProperties: false
+          required: [part]
+          properties:
+            part: {type: string}
+
+    Fact:
+      type: object
+      required: [label, value]
+      properties:
+        label: {type: string}
+        value: {type: string}
+        flag:
+          description: The broker thinks this deserves a look.
+          type: boolean
+
+    Diff:
+      type: [object, "null"]
+      required: [target, lines]
+      properties:
+        target: {type: string}
+        new:
+          description: |
+            The target doesn't exist yet, such as a skill's first version, so every
+            line is added. Clients show it as the new file it is, rather than as
+            lines added to one.
+          type: boolean
+        lines:
+          type: array
+          items:
+            type: object
+            required: [op, text]
+            properties:
+              op:
+                type: string
+                enum: [context, add, delete]
+              text: {type: string}
+              flag: {type: boolean}
+
+    Note:
+      type: object
+      required: [author, text, at]
+      properties:
+        author:
+          type: string
+          enum: [advisor, you]
+        text: {type: string}
+        at: {type: string, format: date-time}
+
+    Part:
+      type: object
+      required: [id, label]
+      properties:
+        id: {type: string}
+        label: {type: string}
+        facts:
+          type: array
+          items: {$ref: "#/components/schemas/Fact"}
+
+    Action:
+      type: object
+      required: [id, label]
+      properties:
+        id:
+          description: |
+            Such as `approve`, `reject`, `return`, `grant`, `answer`, or for a decided
+            item `demote`.
+          type: string
+        label: {type: string}
+        style:
+          type: string
+          enum: [primary, neutral, danger]
+        needs:
+          description: |
+            What the decision has to include for this action. `credential` is a
+            pasted key's `credential_fingerprint`, with its `credential_settings`
+            when the item's connection has settings, and the key itself in the
+            request's `secrets`.
+          type: array
+          items:
+            type: string
+            enum: [note, answer, parts, remember, credential]
+
+    DecisionChoice:
+      description: |
+        What you chose for one item. The fields the action needs (`Action.needs`)
+        must be present; the rest are left out. A choice reconsidering a decided
+        item's decision names it in `supersedes`, and carries a note at most besides:
+        it takes something back, so an unlocked tab may sign it whatever the item's
+        risk.
+      type: object
+      required: [item, content_hash, action]
+      properties:
+        item: {$ref: "#/components/schemas/ItemIdentifier"}
+        content_hash: {$ref: "#/components/schemas/Hash"}
+        action: {type: string}
+        parts:
+          description: |
+            Each part's id, approved or denied. Left out, the action applies to every
+            part.
+          type: object
+          additionalProperties:
+            type: string
+            enum: [approve, deny]
+        answer:
+          type: object
+          properties:
+            choice: {type: string}
+            text: {type: string, maxLength: 4000}
+        remember:
+          description: |
+            The patterns to remember, each for its own duration. Left out, the
+            approval covers only this item. A mount is never approved for this
+            item alone: an approval remembers every mount pattern over a part it
+            approves, for the session (perhaps ending sooner, at a time), until a
+            time, or always, or is refused with 422. The request that raised it has
+            already returned, so only a remembered mount covers the script when it
+            runs again.
+          type: array
+          minItems: 1
+          maxItems: 20
+          items: {$ref: "#/components/schemas/Remember"}
+        note: {type: string, maxLength: 4000}
+        supersedes:
+          description: |
+            For a decided item, the decision this choice reconsiders: the item's
+            latest. A choice naming any other is refused with 409.
+          type: string
+        credential_fingerprint:
+          description: SHA-256 of the key pasted into a Connect item, never the key.
+          allOf: [{$ref: "#/components/schemas/Hash"}]
+        credential_settings:
+          description: |
+            For a Connect item, a value for each of `connection.settings`, by name,
+            matching its pattern, such as Sentry's organization slug. None of them is
+            secret: they are signed with the choice and recorded with the decision.
+          type: object
+          additionalProperties: {type: string, maxLength: 200}
+      x-maji-example:
+        choice:
+          item: "laptop-01jc6z8q3v7m2k4t9r5x1y0b8n"
+          content_hash: "sha256:9c1e7d0f43b2a6e5d8c1f0b9a7e6d5c4b3a2918f7e6d5c4b3a29180f7e6d71aa"
+          action: approve
+          remember:
+            - pattern: p1
+              lasts: session
+        canonical: '{"action":"approve","content_hash":"sha256:9c1e7d0f43b2a6e5d8c1f0b9a7e6d5c4b3a2918f7e6d5c4b3a29180f7e6d71aa","item":"laptop-01jc6z8q3v7m2k4t9r5x1y0b8n","remember":[{"lasts":"session","pattern":"p1"}]}'
+        decision_hash: "sha256:f51855c7ea97a4711c611426b6ad86f6e9108b5cff833ec79171a0f96ac9a78f"
+        nonce: "q3Jf1n9XvYk2tP0aB7cD5e"
+        challenge_base64url: "nJBH_jZCz8_s-GJKCyYMiZQmxgXp4fVS17vhveG0Vdg"
+
+    DecisionChallenge:
+      type: object
+      required: [challenge_id, nonce, decision_hashes, public_key]
+      properties:
+        challenge_id: {type: string}
+        nonce: {type: string}
+        decision_hashes:
+          type: array
+          items: {$ref: "#/components/schemas/Hash"}
+        public_key:
+          description: |
+            `PublicKeyCredentialRequestOptions` for the authenticator: the challenge,
+            `rpId` `localhost`, the registered passkeys, and user verification
+            required.
+          type: object
+
+    Decision:
+      type: object
+      required: [id, item, content_hash, action, decision_hash, by, at]
+      properties:
+        id: {type: string}
+        item: {$ref: "#/components/schemas/ItemIdentifier"}
+        content_hash: {$ref: "#/components/schemas/Hash"}
+        action: {type: string}
+        parts:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [approve, deny]
+        answer:
+          type: object
+          properties:
+            choice: {type: string}
+            text: {type: string}
+        remember:
+          type: array
+          items: {$ref: "#/components/schemas/Remember"}
+        granted:
+          description: The grants the decision made, one for each pattern it remembered.
+          type: array
+          items: {type: string}
+        note: {type: string}
+        credential_fingerprint: {$ref: "#/components/schemas/Hash"}
+        decision_hash: {$ref: "#/components/schemas/Hash"}
+        by:
+          type: object
+          required: [kind]
+          properties:
+            kind:
+              type: string
+              enum: [you, policy]
+            passkey: {type: string}
+            unlock:
+              description: The unlocked tab the decision was made in, if not with a passkey prompt.
+              type: string
+            rule: {type: string}
+            instance:
+              description: The instance the decision was made on.
+              allOf: [{$ref: "#/components/schemas/InstanceIdentifier"}]
+        at: {type: string, format: date-time}
+        signature:
+          description: |
+            The proof as made, so any instance can verify the decision again: the
+            nonce and every hash in the batch, which rebuild the challenge, then either
+            the passkey's assertion (the authenticator's data, the client data and the
+            signature), or, from an unlocked tab, the tab key's signature and the
+            unlock: the key, and the passkey's assertion over it.
+          type: [object, "null"]
+          required: [passkey, nonce, batch, signature]
+          anyOf:
+            - required: [authenticator_data, client_data_json]
+            - required: [unlock]
+          properties:
+            passkey: {type: string}
+            nonce: {type: string}
+            batch:
+              type: array
+              items: {$ref: "#/components/schemas/Hash"}
+            authenticator_data: {type: string, contentEncoding: base64url}
+            client_data_json: {type: string, contentEncoding: base64url}
+            signature: {type: string, contentEncoding: base64url}
+            unlock:
+              type: object
+              required:
+                - id
+                - key
+                - nonce
+                - idle_seconds
+                - passkey
+                - authenticator_data
+                - client_data_json
+                - signature
+              properties:
+                id: {type: string}
+                key: {$ref: "#/components/schemas/TabKey"}
+                nonce: {type: string}
+                idle_seconds: {type: integer}
+                passkey: {type: string}
+                authenticator_data: {type: string, contentEncoding: base64url}
+                client_data_json: {type: string, contentEncoding: base64url}
+                signature: {type: string, contentEncoding: base64url}
+        supersedes:
+          description: The decision this one reconsiders, such as the promotion a demotion takes back.
+          type: [string, "null"]
+        applied:
+          description: What happened when the broker acted on it.
+          type: [object, "null"]
+          properties:
+            outcome:
+              type: string
+              enum: [applied, conflict, failed]
+            at: {type: string, format: date-time}
+            detail: {type: string}
+
+    TabKey:
+      description: |
+        A tab's ECDSA P-256 public key, as WebCrypto exports it in JWK. A private
+        key's `d` is refused.
+      type: object
+      required: [kty, crv, x, y]
+      properties:
+        kty: {type: string, const: EC}
+        crv: {type: string, const: P-256}
+        x: {type: string, contentEncoding: base64url}
+        y: {type: string, contentEncoding: base64url}
+        ext: {type: boolean}
+        key_ops:
+          type: array
+          items: {type: string}
+      additionalProperties: false
+
+    Unlock:
+      type: object
+      required: [id, idle_seconds, ends_at]
+      properties:
+        id: {type: string}
+        idle_seconds:
+          description: How long the tab may go unused before it locks.
+          type: integer
+        ends_at:
+          description: When it locks whatever happens, with its session.
+          type: string
+          format: date-time
+
+    AssertionResponse:
+      description: A WebAuthn `PublicKeyCredential` from `navigator.credentials.get()`, as JSON.
+      type: object
+      required: [id, response, type]
+      properties:
+        id: {type: string}
+        type:
+          type: string
+          const: public-key
+        response:
+          type: object
+          required: [authenticatorData, clientDataJSON, signature]
+          properties:
+            authenticatorData: {type: string, contentEncoding: base64url}
+            clientDataJSON: {type: string, contentEncoding: base64url}
+            signature: {type: string, contentEncoding: base64url}
+            userHandle: {type: [string, "null"], contentEncoding: base64url}
+
+    RegistrationResponse:
+      description: A WebAuthn `PublicKeyCredential` from `navigator.credentials.create()`, as JSON.
+      type: object
+      required: [id, response, type]
+      properties:
+        id: {type: string}
+        type:
+          type: string
+          const: public-key
+        response:
+          type: object
+          required: [attestationObject, clientDataJSON]
+          properties:
+            attestationObject: {type: string, contentEncoding: base64url}
+            clientDataJSON: {type: string, contentEncoding: base64url}
+
+    Access:
+      description: |
+        What a pattern or grant covers: reads, mounting a path read-only, structural
+        changes such as a tick, or calling write stubs. A write stub's changeset
+        still comes to the queue: no remembered approval lets content the requester
+        wrote through.
+      type: string
+      enum: [read, mount, structural, write]
+
+    Lasts:
+      description: For one run, the requester's session, until a time, or always.
+      type: string
+      enum: [run, session, until, permanent]
+
+    GrantGroup:
+      type: object
+      required: [key, count]
+      properties:
+        key:
+          description: |
+            The resource, principal, access, duration or session key the group
+            shares; `(none)` for grants without one.
+          type: string
+        session_name:
+          description: |
+            Grouped by session, the session's name for people, as an item's
+            `session_name` gives it; null for `(none)`.
+          type: [string, "null"]
+        count: {type: integer}
+        permanent:
+          description: How many of them never lapse.
+          type: integer
+        last_used_at: {type: [string, "null"], format: date-time}
+        next_expiry: {type: [string, "null"], format: date-time}
+
+    Remember:
+      description: |
+        Make this approval cover later requests that fit one of the item's
+        patterns, for a run, the requester's session, a set time, or always. Signed as
+        part of the decision. Only an approving action can carry it, only for a
+        pattern whose parts this decision approves, and only for a duration the grant
+        can be held to: a run or session the requester named, or an `until` still to
+        come, with its offset.
+      type: object
+      required: [pattern, lasts]
+      properties:
+        pattern:
+          description: The id of one of the item's `patterns`.
+          type: string
+        lasts: {$ref: "#/components/schemas/Lasts"}
+        until:
+          description: |
+            When `lasts` is `until`, the time the grant lapses. When it is
+            `session`, a time the grant lapses if the session hasn't ended first,
+            such as the end of a working day. Never given for `run` or `permanent`.
+          type: string
+          format: date-time
+
+    Pattern:
+      description: |
+        A shape of request the broker can match exactly, such as "reads of the
+        repository at ~/src/api" or "ticks in task-demo's checklist".
+      type: object
+      required: [id, summary, access, match]
+      properties:
+        id: {type: string}
+        summary: {type: string}
+        access: {$ref: "#/components/schemas/Access"}
+        resource:
+          description: |
+            The resource it covers, such as `~/src/api`, for finding and grouping
+            grants. A mount's resource is the path with every symlink resolved, so
+            it names what is actually mounted, whether a repository, a folder or a
+            file.
+          type: string
+        match:
+          description: |
+            The broker's definition, matched against the facts of later requests:
+            the stubs, the target, and the shape of the change.
+          type: object
+        parts:
+          description: |
+            The ids of the item's parts the pattern covers, such as the one
+            repository of three it mounts. Each part can then be remembered on its
+            own, and a later request is covered part by part, whatever else it asks
+            for. Left out, the pattern covers the whole request.
+          type: array
+          items: {type: string}
+        would_have_matched:
+          description: Recent items this pattern would have covered, newest first.
+          type: array
+          items: {$ref: "#/components/schemas/ItemIdentifier"}
+
+    Resource:
+      type: object
+      required: [kind, name, access]
+      properties:
+        kind:
+          type: string
+          enum: [service, path, record]
+        name:
+          description: Such as `sentry`, `~/src/api`, or `org:task-demo`.
+          type: string
+        access:
+          type: string
+          enum: [read, write]
+
+    ResourceUse:
+      type: object
+      required: [resource, grants]
+      properties:
+        resource: {$ref: "#/components/schemas/Resource"}
+        grants:
+          type: array
+          items: {$ref: "#/components/schemas/Grant"}
+        principals:
+          description: Who reached it.
+          type: array
+          items: {type: string}
+        last_used_at: {type: [string, "null"], format: date-time}
+
+    Passkey:
+      type: object
+      required: [id, name, created_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        created_at: {type: string, format: date-time}
+        last_used_at: {type: [string, "null"], format: date-time}
+
+    PolicyRule:
+      type: object
+      required: [id, kind, when, then]
+      properties:
+        id: {type: string}
+        kind: {$ref: "#/components/schemas/ItemKind"}
+        when:
+          description: |
+            The facts an item must have, such as a changeset whose diff only toggles
+            checkboxes. Matched against broker-computed facts, never the claim.
+          type: object
+        then:
+          type: string
+          enum: [approve, deny, queue]
+        decided_by:
+          description: The policy-change decision that put the rule in force.
+          type: string
+
+    Grant:
+      description: |
+        A standing permission for one principal: a path it may mount, stubs it
+        may call, or an approval remembered from a decision. Policy rules
+        apply to every principal and change only through their own queue item; a
+        grant is narrower, and always lapses or can be revoked.
+      type: object
+      required: [id, principal, pattern, lasts, granted_at]
+      properties:
+        id: {type: string}
+        principal: {type: string}
+        pattern: {$ref: "#/components/schemas/Pattern"}
+        lasts: {$ref: "#/components/schemas/Lasts"}
+        until:
+          description: When it lapses; for a session's grant, if the session hasn't ended first.
+          type: [string, "null"]
+          format: date-time
+        run: {type: [string, "null"]}
+        session: {type: [string, "null"]}
+        session_name:
+          description: |
+            The session's name for people, as an item's `session_name` gives it.
+            Null for a grant that isn't a session's.
+          type: [string, "null"]
+        granted_at: {type: string, format: date-time}
+        decision:
+          description: The decision that made it; null for one made at setup.
+          type: [string, "null"]
+        revoked_at: {type: [string, "null"], format: date-time}
+        match:
+          description: Where a fuzzy search matched, when the request had `q`.
+          oneOf:
+            - {$ref: "#/components/schemas/Match"}
+            - {type: "null"}
+
+    Match:
+      type: object
+      required: [score, field, ranges]
+      properties:
+        score: {type: number}
+        field:
+          description: The field that matched best.
+          type: string
+          enum: [summary, resource, principal]
+        ranges:
+          description: The matched characters, as start and end offsets in that field.
+          type: array
+          items:
+            type: array
+            items: {type: integer}
+            minItems: 2
+            maxItems: 2
+
+    Service:
+      description: |
+        A service the broker can call with a key, as the broker defines it: where the
+        key goes, how it is sent, and what it needs to be allowed.
+      type: object
+      required: [service, label, method, host, sent_as, permissions, settings]
+      properties:
+        service:
+          description: The service's name, which is also its stubs' namespace.
+          type: string
+          pattern: "^[a-z][a-z0-9_]{0,31}$"
+        label: {type: string}
+        method:
+          type: string
+          enum: [api_key]
+        host:
+          description: |
+            The only host the broker sends the key to, from the broker's own
+            configuration.
+          type: string
+        sent_as:
+          description: |
+            How each request carries the key, such as `Authorization: Bearer`.
+          type: string
+        permissions:
+          description: What the key has to be allowed, in the provider's own terms.
+          type: array
+          items: {type: string}
+        key_page:
+          description: Where you make a key at the provider.
+          type: string
+          format: uri
+        settings:
+          description: What is given with the key, none of it secret.
+          type: array
+          items:
+            type: object
+            required: [name, label, pattern]
+            properties:
+              name: {type: string}
+              label: {type: string}
+              description: {type: string}
+              pattern:
+                description: A regular expression the whole value matches.
+                type: string
+
+    Connection:
+      description: A service the broker can call with a key, and whether it holds one.
+      type: object
+      required: [service, label, method, status, host]
+      properties:
+        service: {type: string}
+        label: {type: string}
+        method:
+          type: string
+          enum: [oauth, token, api_key]
+        status:
+          type: string
+          enum: [not_connected, connected, expired, revoked]
+        scopes:
+          type: array
+          items: {type: string}
+        host:
+          description: The only host the broker sends this credential to.
+          type: string
+        fingerprint: {$ref: "#/components/schemas/Hash"}
+        settings:
+          description: The settings given with the key, none of them secret.
+          type: object
+          additionalProperties: {type: string}
+        connected_at: {type: string, format: date-time}
+        decision:
+          description: The decision that connected the service.
+          type: string
+        item:
+          description: |
+            The Connect item waiting for the service, if one is; otherwise the item
+            whose decision connected it.
+          type: string
+
+    Event:
+      description: |
+        One event. On the wire, `event:` is the type, `id:` the position, and `data:`
+        this object as JSON.
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum:
+            - item.created
+            - item.updated
+            - item.decided
+            - item.expired
+            - item.withdrawn
+            - decision.applied
+            - grant.changed
+            - connection.changed
+            - passkey.added
+            - resync
+        item: {$ref: "#/components/schemas/ItemIdentifier"}
+        decision: {type: string}
+        grant: {type: string}
+        service: {type: string}

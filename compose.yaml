@@ -1,0 +1,174 @@
+# maji-mcp, as one compose project for each instance (docs/design/deployment.md).
+#
+# `make up` builds the images, creates the secret files in ~/.config/maji-mcp/secrets
+# (maji-setup) and starts the stack; `make connect-claude-code` points Claude Code at
+# it, and `make bridge` serves emacs-org-mcp for the broker. docs/using.md covers
+# setup and every setting below.
+#
+# MAJI_PREFIX names the volumes, so a second stack (a test, say) can't touch this one's.
+# MAJI_GATEWAY_PORT, MAJI_CONTROL_PORT, MAJI_SECRETS, MAJI_POLICY and MAJI_SERVERS move
+# its ports and files. MAJI_SERVICE_IMAGE and MAJI_RUNTIME_IMAGE run other builds of
+# the images. MAJI_MOUNT_ROOT and MAJI_SECRETS_DIR say where mounts may come from, and
+# MAJI_NEVER_MOUNT where your own list of paths never mounted is (the runner, below).
+
+name: ${MAJI_PREFIX:-maji}
+
+x-service: &service
+  image: ${MAJI_SERVICE_IMAGE:-maji-service:latest}
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  broker:
+    <<: *service
+    command:
+      - maji-broker
+      - --policy=/etc/maji/policy.json
+      - --run-log=/var/lib/maji/runs.db
+      - --servers=/etc/maji/servers.json
+      - --control-plane=/run/maji-plane-broker/control.sock
+      - --library=/var/lib/maji-library
+      - --publisher=${MAJI_PUBLISHER:-me}
+      - --credentials=/var/lib/maji-credentials
+    environment:
+      SENTRY_URL: ${SENTRY_URL:-https://sentry.io}
+      GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
+    configs:
+      - source: policy
+        target: /etc/maji/policy.json
+      - source: servers
+        target: /etc/maji/servers.json
+    secrets: [emacs_org_token]
+    volumes:
+      - broker-call:/run/maji
+      - broker-control:/run/maji-control
+      - run-log:/var/lib/maji
+      - library:/var/lib/maji-library
+      - credentials:/var/lib/maji-credentials
+      - control-broker:/run/maji-plane-broker
+    # The broker is the only service that reaches the network: Sentry, Jira, GitHub,
+    # and servers on the host through host.docker.internal. It connects to the servers in
+    # servers.json when it starts, so restart it after starting a bridge
+    # (`make bridge` does). It asks the control plane, through the
+    # control plane's socket for it, whether grants cover the paths a run mounts.
+    #
+    # The skill library is on a volume only the broker mounts, so nothing but the
+    # broker writes which skills you promoted (broker/library.py). MAJI_PUBLISHER
+    # names the namespace this instance saves skills under, one per persona.
+    #
+    # So are the keys you connect services with, such as Sentry's, which you paste
+    # into the web app (broker/credentials.py). SENTRY_URL is the only host the
+    # Sentry key is sent to, and GITHUB_API_URL the only one the GitHub key is. The
+    # Jira key goes only to Atlassian's API gateway, api.atlassian.com.
+
+  runner:
+    <<: *service
+    # The runner reaches the Docker socket through the socket's group, not as root.
+    # The group is the one a container sees on the socket, and differs from one
+    # Docker to another: `make up` reads it from the socket and sets
+    # MAJI_DOCKER_GID. A stack started without `make` sets MAJI_DOCKER_GID itself;
+    # 102 is Rancher Desktop's. The runner never runs agent code itself; every
+    # executor it starts gets the fixed sandbox flags (runner/sandbox.py).
+    #
+    # The runner sees your home directory read-only, at its own path, to resolve the
+    # paths a run asks to mount the way the Docker daemon will (runner/mounts.py).
+    # An executor gets only the paths granted, never this. The runner already holds
+    # the Docker socket, which could mount anything there. maji-mcp's own secrets
+    # are never mounted, nor any folder holding them, and the runner won't start
+    # without knowing where they are. Nor is anything on your never-mount list, which
+    # the runner reads through that same view of your home directory before each run;
+    # a run's scripts never see it.
+    group_add: ["${MAJI_DOCKER_GID:-102}"]
+    command:
+      - maji-runner
+      - --broker-volume=${MAJI_PREFIX:-maji}-broker-call
+      - --image=python=${MAJI_RUNTIME_IMAGE:-maji-python-runtime:latest}
+      - --mount-root=${MAJI_MOUNT_ROOT:-${HOME}}
+      - --secrets-dir=${MAJI_SECRETS_DIR:-${HOME}/.config/maji-mcp/secrets}
+      - --never-mount-file=${MAJI_NEVER_MOUNT:-${HOME}/.config/maji-mcp/never-mount}
+      - --home=${HOME}
+    network_mode: none
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - broker-control:/run/maji-control
+      - runner:/run/maji-runner
+      - ${MAJI_MOUNT_ROOT:-${HOME}}:${MAJI_MOUNT_ROOT:-${HOME}}:ro
+    depends_on: [broker]
+
+  gateway:
+    <<: *service
+    command:
+      - maji-gateway
+      - --host=0.0.0.0
+      - --port=8765
+      - --tokens=/run/secrets/gateway_tokens
+    ports:
+      - "127.0.0.1:${MAJI_GATEWAY_PORT:-8765}:8765"
+    secrets: [gateway_tokens]
+    volumes:
+      - broker-control:/run/maji-control
+      - runner:/run/maji-runner
+    depends_on: [broker, runner]
+
+  control:
+    <<: *service
+    # The control plane: the queue you decide, served to your browser at localhost,
+    # since passkeys can't be bound to an IP address. The broker and the gateway each
+    # get an internal socket of their own, in a volume only they mount; neither socket
+    # has a way to decide.
+    command:
+      - maji-control
+      - --db=/var/lib/maji-control/control.db
+      - --instance-file=/run/secrets/instance
+      - --clients=/run/secrets/control_clients
+      - --origin=http://localhost:${MAJI_CONTROL_PORT:-8767}
+      - --host=0.0.0.0
+      - --port=8767
+      - --broker-dir=/run/maji-plane-broker
+      - --gateway-dir=/run/maji-plane-gateway
+    ports:
+      - "127.0.0.1:${MAJI_CONTROL_PORT:-8767}:8767"
+    secrets: [instance, control_clients]
+    volumes:
+      - control-data:/var/lib/maji-control
+      - control-broker:/run/maji-plane-broker
+      - control-gateway:/run/maji-plane-gateway
+
+volumes:
+  broker-call:
+    name: ${MAJI_PREFIX:-maji}-broker-call
+  broker-control:
+    name: ${MAJI_PREFIX:-maji}-broker-control
+  runner:
+    name: ${MAJI_PREFIX:-maji}-runner
+  run-log:
+    name: ${MAJI_PREFIX:-maji}-run-log
+  library:
+    name: ${MAJI_PREFIX:-maji}-library
+  credentials:
+    name: ${MAJI_PREFIX:-maji}-credentials
+  control-data:
+    name: ${MAJI_PREFIX:-maji}-control-data
+  control-broker:
+    name: ${MAJI_PREFIX:-maji}-control-broker
+  control-gateway:
+    name: ${MAJI_PREFIX:-maji}-control-gateway
+
+configs:
+  policy:
+    file: ${MAJI_POLICY:-./config/policy.json}
+  servers:
+    file: ${MAJI_SERVERS:-./config/servers.json}
+
+secrets:
+  gateway_tokens:
+    file: ${MAJI_SECRETS:-${HOME}/.config/maji-mcp/secrets}/gateway_tokens.json
+  emacs_org_token:
+    file: ${MAJI_SECRETS:-${HOME}/.config/maji-mcp/secrets}/emacs-org.token
+  instance:
+    file: ${MAJI_SECRETS:-${HOME}/.config/maji-mcp/secrets}/instance
+  control_clients:
+    file: ${MAJI_SECRETS:-${HOME}/.config/maji-mcp/secrets}/control_clients.json

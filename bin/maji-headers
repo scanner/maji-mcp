@@ -1,0 +1,39 @@
+#!/bin/sh
+# The headers Claude Code sends maji-mcp's gateway: its token, and the session it names.
+#
+#   maji-headers <token file>
+#
+# Claude Code runs this as the server's `headersHelper` each time it connects, at
+# session start and on reconnect, and sends what it prints with every request
+# (`make connect-claude-code` sets it up). Claude Code speaks an MCP protocol revision
+# without sessions, so a new id each time it connects is what tells one of its
+# sessions from the next (`NamedSessions` in `src/maji_mcp/gateway/server.py`).
+#
+# The token is read from its file each time, so it never sits in Claude Code's
+# configuration. It is checked to hold only the characters a token is made of, which
+# also keeps it from breaking out of the JSON printed around it.
+
+set -eu
+
+# In the C locale, the ranges below hold ASCII letters and digits only.
+#
+export LC_ALL=C
+
+if [ "$#" -ne 1 ]; then
+    echo "usage: maji-headers <token file>" >&2
+    exit 2
+fi
+
+token=$(cat -- "$1")
+case $token in
+    '' | *[!A-Za-z0-9_-]*)
+        echo "maji-headers: $1 doesn't hold a token" >&2
+        exit 1
+        ;;
+esac
+
+# 16 random bytes as 32 hex digits, the form the gateway's log shortens to 8.
+#
+session=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+
+printf '{"Authorization": "Bearer %s", "X-Maji-Session": "%s"}\n' "$token" "$session"

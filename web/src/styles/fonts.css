@@ -1,0 +1,12 @@
+/*
+ * One type family, Atkinson Hyperlegible, in a proportional face for text and a
+ * fixed-width face for code. It was designed for low vision, so 1, l, I, O, 0 and o
+ * can't be mistaken for each other, and quoted code reads as part of the same text.
+ * The files come with the web client; nothing is fetched from elsewhere.
+ */
+@import "@fontsource/atkinson-hyperlegible-next/400.css";
+@import "@fontsource/atkinson-hyperlegible-next/400-italic.css";
+@import "@fontsource/atkinson-hyperlegible-next/600.css";
+@import "@fontsource/atkinson-hyperlegible-next/700.css";
+@import "@fontsource/atkinson-hyperlegible-mono/400.css";
+@import "@fontsource/atkinson-hyperlegible-mono/600.css";

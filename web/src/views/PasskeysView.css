@@ -1,0 +1,86 @@
+.passkeys {
+  display: grid;
+  gap: var(--space-5);
+  max-width: 48rem;
+}
+h1:focus {
+  outline: none;
+}
+.intro,
+.meta {
+  color: var(--muted);
+}
+.meta {
+  font-size: var(--step--1);
+}
+section {
+  display: grid;
+  gap: var(--space-3);
+}
+.list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.list li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.name {
+  font-weight: 600;
+}
+.add {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 28rem;
+}
+label {
+  font-weight: 600;
+}
+input {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.add button {
+  justify-self: start;
+  padding: var(--space-2) var(--space-4);
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+.danger {
+  padding: var(--space-2) var(--space-3);
+  border: 2px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--danger);
+  font-weight: 600;
+}
+.toggle {
+  display: flex;
+  gap: var(--space-2);
+  align-items: start;
+}
+.toggle input {
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: 0.2rem;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.detail {
+  color: var(--muted);
+  max-width: 40rem;
+}

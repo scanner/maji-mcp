@@ -1,0 +1,35 @@
+.facts {
+  display: grid;
+  font-size: var(--step--1);
+}
+.facts > div {
+  display: grid;
+  grid-template-columns: minmax(7rem, 10rem) 1fr;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+}
+dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+dd {
+  overflow-wrap: anywhere;
+}
+.flagged dd {
+  color: var(--caution);
+}
+.flag {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--caution);
+  border-radius: 999px;
+  background: var(--caution-soft);
+  font-size: var(--step--1);
+}
+@media (max-width: 30rem) {
+  .facts > div {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}

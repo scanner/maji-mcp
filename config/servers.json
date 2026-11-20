@@ -1,0 +1,24 @@
+{
+  "servers": {
+    "org": {
+      "url": "http://host.docker.internal:8766/mcp",
+      "token_file": "/run/secrets/emacs_org_token",
+      "version": "1.0",
+      "adapter": "emacs-org",
+      "tools": {
+        "get_task": "read",
+        "list_tasks": "read",
+        "search_tasks": "read",
+        "org_stats": "read",
+        "list_projects": "read",
+        "get_project": "read",
+        "search_projects": "read",
+        "list_journal_dates": "read",
+        "list_journal_entries": "read",
+        "get_journal_entry": "read",
+        "search_journal": "read",
+        "search_org": "read"
+      }
+    }
+  }
+}

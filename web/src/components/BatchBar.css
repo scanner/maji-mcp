@@ -1,0 +1,30 @@
+.batch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+button {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius);
+  border: 2px solid transparent;
+  font-weight: 600;
+}
+.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.neutral {
+  background: var(--surface);
+  border-color: var(--line-strong);
+}

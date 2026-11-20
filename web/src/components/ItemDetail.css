@@ -1,0 +1,127 @@
+.detail {
+  display: grid;
+  gap: var(--space-4);
+}
+header {
+  display: grid;
+  gap: var(--space-1);
+}
+.heading {
+  overflow-wrap: anywhere;
+}
+.heading:focus {
+  outline: none;
+}
+.sub {
+  font-size: var(--step-1);
+}
+section {
+  display: grid;
+  gap: var(--space-2);
+}
+.subject code {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.tag {
+  font-size: var(--step--1);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+}
+.risk-high {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  font-weight: 600;
+}
+.risk {
+  padding: var(--space-3) var(--space-4);
+  border-left: 4px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+}
+.risk ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
+}
+.risk .evidence {
+  margin-top: var(--space-1);
+  font-size: var(--step--1);
+}
+.risk .evidence code {
+  overflow-wrap: anywhere;
+}
+.from {
+  color: var(--muted);
+}
+.found {
+  gap: var(--space-1);
+}
+.found .sub {
+  font-size: var(--step-0);
+}
+.claim blockquote,
+.words blockquote {
+  padding: var(--space-2) var(--space-3);
+  border-left: 4px solid var(--line-strong);
+  background: var(--surface-sunken);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.caveat,
+.alone {
+  color: var(--muted);
+  font-size: var(--step--1);
+}
+.disclose,
+.ask-again {
+  justify-self: start;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.notes {
+  padding-left: var(--space-5);
+}
+.record {
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.record .parts {
+  padding-left: var(--space-4);
+}
+/* Taking the decision back sits below the record of it, set apart by a rule. */
+.reconsider {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+/*
+ * Open in its row, the item is already inside a card, beneath the row's title: its
+ * parts sit closer, its headings are the size of its text, and the decision form
+ * needs no box of its own.
+ */
+.detail.inline {
+  gap: var(--space-3);
+}
+.inline .sub {
+  font-size: var(--step-0);
+}
+.inline :deep(.decide) {
+  padding: 0;
+  border: 0;
+}

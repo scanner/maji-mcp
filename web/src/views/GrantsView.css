@@ -1,0 +1,133 @@
+.grants {
+  display: grid;
+  gap: var(--space-5);
+  max-width: 64rem;
+}
+h1:focus {
+  outline: none;
+}
+.intro,
+.hint,
+.empty {
+  color: var(--muted);
+}
+.hint {
+  font-size: var(--step--1);
+}
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: start;
+}
+.field {
+  display: grid;
+  gap: var(--space-1);
+  flex: 1 1 18rem;
+}
+.field:last-child {
+  flex: 0 1 14rem;
+}
+label {
+  font-weight: 600;
+}
+input,
+select {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+section {
+  display: grid;
+  gap: var(--space-3);
+}
+.groups,
+.list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.groups li,
+.list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.group {
+  display: grid;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+.group[aria-pressed="true"] .key {
+  text-decoration: underline;
+  text-decoration-thickness: 3px;
+}
+.key {
+  font-family: var(--font-code);
+  font-weight: 600;
+}
+/* A session's group is named in words, styled as a session is everywhere, and marked
+   as chosen by one line beneath the name and key together, which an underline under
+   each would break up. */
+.key.words {
+  justify-self: start;
+  font-family: inherit;
+  font-weight: 400;
+  border-bottom: 3px solid transparent;
+}
+.group[aria-pressed="true"] .key.words {
+  text-decoration: none;
+  border-bottom-color: currentColor;
+}
+.count,
+.meta {
+  color: var(--muted);
+  font-size: var(--step--1);
+}
+.revoke-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.what {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 20rem;
+}
+.summary {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+mark {
+  background: var(--caution-soft);
+  color: var(--fg);
+  text-decoration: underline;
+  text-decoration-color: var(--caution);
+  text-decoration-thickness: 2px;
+}
+button.danger,
+button.neutral {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  border: 2px solid var(--danger);
+  background: var(--surface);
+  color: var(--danger);
+  font-weight: 600;
+}
+button.neutral {
+  border-color: var(--line-strong);
+  color: var(--fg);
+}

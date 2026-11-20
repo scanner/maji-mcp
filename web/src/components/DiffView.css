@@ -1,0 +1,67 @@
+.diff {
+  display: grid;
+  gap: var(--space-2);
+}
+figcaption {
+  font-weight: 600;
+}
+.scroll {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+td,
+th {
+  padding: 0 var(--space-3);
+  vertical-align: top;
+}
+.mark {
+  width: 2rem;
+  text-align: center;
+  font-family: var(--font-code);
+  font-weight: 700;
+  border-right: 1px solid var(--line);
+}
+/* A line too long for the width wraps hanging from the line's own indent, so its
+   continuation doesn't read as a line of its own. */
+code {
+  display: flex;
+}
+.lead {
+  flex: none;
+  white-space: pre;
+}
+.rest {
+  min-width: 0;
+  padding-left: 2ch;
+  text-indent: -2ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* An empty line keeps a line's height, as it has in the file. */
+.rest:empty::before {
+  content: "\00a0";
+}
+.add {
+  background: var(--added-bg);
+}
+.delete {
+  background: var(--removed-bg);
+}
+.delete .rest {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.flagged td {
+  outline: 2px dashed var(--caution);
+  outline-offset: -2px;
+}
+/* A new file reads as code: no marks, and no colour saying every line was added. */
+.whole .add {
+  background: none;
+}
