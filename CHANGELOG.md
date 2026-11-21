@@ -7,6 +7,8 @@ is 0.x, any release may change an interface.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-20
+
 The first public version. Scripts only read: the first work is read-only on purpose,
 to get the patterns right before a script is allowed to change anything. Write
 access is planned.
@@ -37,4 +39,5 @@ access is planned.
 - **Commands** to start the stack, connect an app, run the bridge, try a demo queue,
   and back up and restore the queue's database.
 
-[Unreleased]: https://github.com/scanner/maji-mcp/commits/main
+[Unreleased]: https://github.com/scanner/maji-mcp/compare/0.1.0...HEAD
+[0.1.0]: https://github.com/scanner/maji-mcp/releases/tag/0.1.0
