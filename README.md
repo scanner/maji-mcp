@@ -1,5 +1,7 @@
 # maji-mcp
 
+[![Build Status](https://drone.apricot.com/api/badges/scanner/maji-mcp/status.svg)](https://drone.apricot.com/scanner/maji-mcp)
+
 maji-mcp is a self-hosted service that gives your AI agents one careful way to reach
 your services and your files. An agent writes a short script against typed functions,
 the script runs in a sandbox, and the agent reads only what the script prints.
