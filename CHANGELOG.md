@@ -32,6 +32,8 @@ access is planned.
   grant is remembered for a session, until a time, or until you revoke it.
 - **A policy, rate limits and a run log** for every call a script makes.
 - **Apps.** Claude Code through a headers helper, and Claude Desktop through a relay.
+- **Released images** on ghcr.io, `ghcr.io/scanner/maji-service` and
+  `ghcr.io/scanner/maji-python-runtime`, for linux/amd64 and linux/arm64.
 - **Commands** to start the stack, connect an app, run the bridge, try a demo queue,
   and back up and restore the queue's database.
 

@@ -10,6 +10,16 @@ decision says so, and the earlier entry stays.
 
 ## 2026-11-20
 
+- **Continuous integration runs on Drone, and a tag publishes the images to
+  ghcr.io.** The checks are the ones every change already passes: `make check`,
+  `make test` and `make web-check`. The Docker tests stay on a developer's machine
+  until Linux is a supported host, and they would need the Docker socket in CI. The
+  images are published as `ghcr.io/scanner/maji-service` and
+  `ghcr.io/scanner/maji-python-runtime`, the local names under the registry, so
+  `MAJI_SERVICE_IMAGE` and `MAJI_RUNTIME_IMAGE` name either one the same way. Each
+  is built for linux/amd64 and linux/arm64 and tagged with the release's version
+  ([development.md](development.md)).
+
 - **The public repository holds made-up names only, and starts from a fresh
   history.** The proof of concept was built against one person's services, and its
   examples and measurements grew from that work. Examples, fixtures, mockups and

@@ -4,7 +4,7 @@
  */
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Item } from "@/api/client";
 import DecisionForm from "@/components/DecisionForm.vue";
@@ -608,7 +608,11 @@ describe("the decision form", () => {
     await form.find("input[type=password]").setValue(` ${key} `);
     await form.find(`#setting-${connect().id}-org`).setValue("acme");
     await form.findAll("button").find((b) => b.text() === "Connect")!.trigger("click");
-    await new Promise((settled) => setTimeout(settled, 0));
+
+    // The form emits once WebCrypto has hashed the key, which Node does on its
+    // thread pool, so the event can come after any number of ticks.
+    //
+    await vi.waitFor(() => expect(form.emitted("decide")).toBeDefined());
 
     const [choice, pasted] = form.emitted("decide")![0]! as [Record<string, unknown>, Record<string, string>];
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));

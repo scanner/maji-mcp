@@ -1,0 +1,244 @@
+---
+kind: pipeline
+name: maji-mcp Tests
+
+# The checks every change passes (AGENTS.md): lint, formatting and types, the tests
+# that need only Python, and the web client's types and tests. The Docker tests and
+# the browser tests run on a developer's machine: they need a Docker daemon and
+# Chrome.
+#
+# Temp volumes are shared by the steps of one run. The lint step installs the Python
+# dependencies and the types step the web client's, and the test steps after them
+# find those installed.
+#
+volumes:
+  - name: python-venv
+    temp: {}
+  - name: web-node-modules
+    temp: {}
+
+steps:
+  - name: python lint, format and types
+    # NOTE: Keep this version in sync with .python-version
+    image: "python:3.14.10"
+    volumes:
+      - name: python-venv
+        path: /drone/src/.venv
+    environment:
+      PYTHONUNBUFFERED: 1
+      UV_LINK_MODE: copy
+    commands:
+      - pip install uv
+      - uv sync --frozen
+      - make check
+
+  - name: python tests
+    image: "python:3.14.10"
+    depends_on:
+      - python lint, format and types
+    volumes:
+      - name: python-venv
+        path: /drone/src/.venv
+    environment:
+      PYTHONUNBUFFERED: 1
+      UV_LINK_MODE: copy
+    commands:
+      - pip install uv
+      - make test
+
+  # The web client's types are generated from api/openapi.yaml first, so a client
+  # that has drifted from the contract fails here.
+  #
+  - name: web client types
+    image: "node:22"
+    volumes:
+      - name: web-node-modules
+        path: /drone/src/web/node_modules
+    commands:
+      - cd web
+      - npm ci
+      - npm run typecheck
+
+  - name: web client tests
+    image: "node:22"
+    depends_on:
+      - web client types
+    volumes:
+      - name: web-node-modules
+        path: /drone/src/web/node_modules
+    commands:
+      - cd web
+      - npm test
+
+---
+kind: pipeline
+name: Build linux/amd64
+
+# Each architecture builds natively on a runner of that architecture and pushes
+# one tag per image. 'Publish multi-arch manifests' joins them under the release
+# tags. ${DRONE_TAG##v} drops the tag's 'v', as auto_tag does.
+#
+platform:
+  os: linux
+  arch: amd64
+
+depends_on:
+  - maji-mcp Tests
+
+steps:
+  - name: Build service
+    image: plugins/docker
+    settings:
+      username:
+        from_secret: GHCR_USER
+      password:
+        from_secret: GHCR_PAT
+      repo: ghcr.io/scanner/maji-service
+      registry: ghcr.io
+      dockerfile: images/service/Dockerfile
+      context: .
+      tags:
+        - ${DRONE_TAG##v}-linux-amd64
+
+  - name: Build python runtime
+    image: plugins/docker
+    settings:
+      username:
+        from_secret: GHCR_USER
+      password:
+        from_secret: GHCR_PAT
+      repo: ghcr.io/scanner/maji-python-runtime
+      registry: ghcr.io
+      dockerfile: images/python-runtime/Dockerfile
+      context: .
+      tags:
+        - ${DRONE_TAG##v}-linux-amd64
+
+trigger:
+  event:
+    - tag
+
+---
+kind: pipeline
+name: Build linux/arm64
+
+# Each architecture builds natively on a runner of that architecture and pushes
+# one tag per image. 'Publish multi-arch manifests' joins them under the release
+# tags. ${DRONE_TAG##v} drops the tag's 'v', as auto_tag does.
+#
+platform:
+  os: linux
+  arch: arm64
+
+depends_on:
+  - maji-mcp Tests
+
+steps:
+  - name: Build service
+    image: plugins/docker
+    settings:
+      username:
+        from_secret: GHCR_USER
+      password:
+        from_secret: GHCR_PAT
+      repo: ghcr.io/scanner/maji-service
+      registry: ghcr.io
+      dockerfile: images/service/Dockerfile
+      context: .
+      tags:
+        - ${DRONE_TAG##v}-linux-arm64
+
+  - name: Build python runtime
+    image: plugins/docker
+    settings:
+      username:
+        from_secret: GHCR_USER
+      password:
+        from_secret: GHCR_PAT
+      repo: ghcr.io/scanner/maji-python-runtime
+      registry: ghcr.io
+      dockerfile: images/python-runtime/Dockerfile
+      context: .
+      tags:
+        - ${DRONE_TAG##v}-linux-arm64
+
+trigger:
+  event:
+    - tag
+
+---
+kind: pipeline
+name: Publish multi-arch manifests
+
+depends_on:
+  - Build linux/amd64
+  - Build linux/arm64
+
+steps:
+  - name: Publish service
+    image: plugins/manifest
+    settings:
+      username:
+        from_secret: GHCR_USER
+      password:
+        from_secret: GHCR_PAT
+      spec: ci/manifest-service.tmpl
+      auto_tag: true
+
+  - name: Publish python runtime
+    image: plugins/manifest
+    settings:
+      username:
+        from_secret: GHCR_USER
+      password:
+        from_secret: GHCR_PAT
+      spec: ci/manifest-python-runtime.tmpl
+      auto_tag: true
+
+trigger:
+  event:
+    - tag
+
+---
+kind: pipeline
+name: Build Notify
+
+depends_on:
+  - maji-mcp Tests
+  - Build linux/amd64
+  - Build linux/arm64
+  - Publish multi-arch manifests
+
+trigger:
+  status:
+    - success
+    - failure
+
+steps:
+  - name: slack notification
+    image: plugins/slack
+    settings:
+      webhook:
+        from_secret: slack_notify_webhook
+      channel: builds
+      username: drone
+      template: >-
+        {{#if build.pull }}
+          *{{#success build.status }}✔{{ else }}✘{{/success }} {{ uppercasefirst build.status }}*: <https://github.com/{{ repo.owner }}/{{ repo.name }}/pull/{{ build.pull }}|Pull Request {{ build.pull }}>
+        {{ else }}
+          *{{#success build.status }}✔{{ else }}✘{{/success }} {{ uppercasefirst build.status }}: Build {{ build.number }}* (type: `{{ build.event }}`)
+        {{/if }}
+
+        Repository: <https://github.com/{{ repo.owner }}/{{ repo.name }}|{{ repo.name }}>
+
+        Commit message: {{ build.message }}
+
+        Commit: <https://github.com/{{ repo.owner }}/{{ repo.name }}/commit/{{ build.commit }}|{{ truncate build.commit 8 }}>
+
+        Branch: <https://github.com/{{ repo.owner }}/{{ repo.name }}/commits/{{ build.branch }}|{{ build.branch }}>
+
+        Author: {{ build.author }}
+
+        Duration: {{ since build.started }}
+
+        <{{ build.link }}|Visit build page ↗>
