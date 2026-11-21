@@ -1,5 +1,7 @@
 # maji-mcp
 
+[![Build Status](https://drone.apricot.com/api/badges/scanner/maji-mcp/status.svg)](https://drone.apricot.com/scanner/maji-mcp)
+
 maji-mcp is a self-hosted service that gives your AI agents one careful way to reach
 your services and your files. An agent writes a short script against typed functions,
 the script runs in a sandbox, and the agent reads only what the script prints.
@@ -141,7 +143,7 @@ is a container. maji-mcp does not run without Docker.
 |---|---|
 | **Supported and tested** | macOS on Apple silicon, with [Rancher Desktop](https://rancherdesktop.io) (Docker Engine 29). Agents in Claude Code and Claude Desktop. The web client in Chrome, with a passkey in the system keychain. |
 | **Expected to work, not tested** | Docker Desktop or Colima on macOS: the commands use the Docker CLI's current context, and `make up` reads the Docker socket's group from the socket. The web client in Safari and Firefox. Any other app that speaks MCP over HTTP with a bearer token. |
-| **Not working yet** | Linux. The stack is plain Docker Compose, but the broker reaches the bridge on your machine through `host.docker.internal`, which Docker on Linux does not define by default, and `make connect-claude-desktop` knows only the macOS path of Claude Desktop's settings. Linux is planned, as a host for the stack and for continuous integration ([docs/roadmap.md](docs/roadmap.md)). |
+| **Not working yet** | Linux. The stack is plain Docker Compose, but the broker reaches the bridge on your machine through `host.docker.internal`, which Docker on Linux does not define by default, and `make connect-claude-desktop` knows only the macOS path of Claude Desktop's settings. Linux is planned, as a host for the stack and for the Docker tests in continuous integration ([docs/roadmap.md](docs/roadmap.md)). |
 | **Not supported** | Windows. |
 
 To build and run you need Docker, [uv](https://docs.astral.sh/uv/) (which installs
@@ -196,6 +198,11 @@ Nothing is installed outside the paths in this table.
 maji-mcp reads one file of yours and never writes it:
 `~/.config/maji-mcp/never-mount`, your list of paths no script may read. Each
 container's log is kept by Docker, and `make logs` shows it.
+
+**Released images.** Each tagged release also publishes both images, built for
+linux/amd64 and linux/arm64, as `ghcr.io/scanner/maji-service` and
+`ghcr.io/scanner/maji-python-runtime`, tagged with the release's version (`0.1.0`,
+`0.1`, `0`). `make up` does not use them: it builds both images from the checkout.
 
 To remove maji-mcp: `make down`, then remove the `maji-*` volumes and the two images
 with Docker, delete `~/.config/maji-mcp/`, `~/.cache/maji-mcp/`,

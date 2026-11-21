@@ -132,6 +132,19 @@ make test-all    # check, test, web-check, test-browser and test-docker
 - **Tests never touch a running stack.** Each Docker test uses its own project
   prefix, volumes, ports and secrets.
 
+## Continuous integration
+
+Drone runs `.drone.yml`. Every push and pull request runs four steps: Python lint,
+format and types (`make check`) and then the Python tests (`make test`), in a `python`
+image of the version in `.python-version`, and beside them the web client's types and
+then its tests (`make web-check` in two halves), in a `node:22` image. The Docker
+tests and the browser tests run only on a developer's machine.
+
+A tag also builds both images natively on linux/amd64 and linux/arm64, pushes them to
+ghcr.io, and joins each pair into one multi-arch image under the release's version
+tags (`ci/manifest-service.tmpl`, `ci/manifest-python-runtime.tmpl`). A leading `v`
+on the tag is dropped, so `v0.1.0` and `0.1.0` both publish `0.1.0`.
+
 ## Working on a part
 
 **A stub or a service.** Stubs are defined in `src/maji_mcp/broker/` with a name,

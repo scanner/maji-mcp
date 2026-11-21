@@ -14,19 +14,25 @@ from pathlib import Path
 def git(repo: Path, *args: str, author: str = "Ann", when: str = "2026-01-02") -> None:
     """Run git in `repo` as `author`, at noon UTC on `when`, as the fixture's history."""
     stamp = f"{when}T12:00:00+00:00"
+    email = f"{author.lower()}@example.com"
+
+    # Git's GIT_AUTHOR_* and GIT_COMMITTER_* variables outrank its config, and a CI
+    # runner may set them to the commit being tested, so the fixture sets all of them.
+    #
     subprocess.run(
-        [
-            "git",
-            "-c",
-            f"user.name={author}",
-            "-c",
-            f"user.email={author.lower()}@example.com",
-            *args,
-        ],
+        ["git", *args],
         cwd=repo,
         check=True,
         capture_output=True,
-        env={**os.environ, "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp},
+        env={
+            **os.environ,
+            "GIT_AUTHOR_NAME": author,
+            "GIT_AUTHOR_EMAIL": email,
+            "GIT_AUTHOR_DATE": stamp,
+            "GIT_COMMITTER_NAME": author,
+            "GIT_COMMITTER_EMAIL": email,
+            "GIT_COMMITTER_DATE": stamp,
+        },
     )
 
 

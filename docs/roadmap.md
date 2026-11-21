@@ -60,7 +60,7 @@ one instance is built. Stage 4 was other languages and the live Emacs.
 
 **With the public repository:**
 
-- [ ] Continuous integration, on Drone: lint, types and tests on every push
+- [x] Continuous integration, on Drone: lint, types and tests on every push
   (`make check`, `make test`, `make web-check`), and on a tag, both images built and
   published
 - [ ] Linux, as a host for the stack. People who join may not use a Mac, and CI runs

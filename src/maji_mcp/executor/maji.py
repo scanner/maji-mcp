@@ -309,12 +309,16 @@ def git_log(
                     "removed": None if removed == "-" else int(removed),
                 }
             )
+        # Newer git writes a UTC `%aI` with `Z`, older git with `+00:00`. The
+        # round trip through `datetime` gives the `+hh:mm` form on every git, the
+        # form `blame` gives.
+        #
         commits.append(
             {
                 "sha": sha,
                 "author": author,
                 "email": email,
-                "date": date,
+                "date": datetime.fromisoformat(date).isoformat(),
                 "subject": subject,
                 "files": files,
             }
