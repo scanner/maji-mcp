@@ -8,6 +8,12 @@
 #
 FROM python:3.14-slim@sha256:af8a5aa14780025dbfbcfbc81bd8a91ebd87711dd5b0f48ed71090949dd7cb1d
 
+# ghcr.io lists a published image with the repository its `source` label names.
+#
+LABEL org.opencontainers.image.source=https://github.com/scanner/maji-mcp
+LABEL org.opencontainers.image.description="maji-mcp's Python runtime, where agent-written scripts run"
+LABEL org.opencontainers.image.licenses=BSD-3-Clause
+
 # A fixed non-root user. The runner also passes --user, so this is the fallback, not
 # the control.
 #

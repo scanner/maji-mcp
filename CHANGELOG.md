@@ -7,6 +7,11 @@ is 0.x, any release may change an interface.
 
 ## [Unreleased]
 
+### Added
+
+- **The released images name their source repository,** so ghcr.io lists them with
+  maji-mcp, with a description and the license.
+
 ## [0.1.0] - 2026-11-20
 
 The first public version. Scripts only read: the first work is read-only on purpose,
