@@ -201,8 +201,8 @@ container's log is kept by Docker, and `make logs` shows it.
 
 **Released images.** Each tagged release also publishes both images, built for
 linux/amd64 and linux/arm64, as `ghcr.io/scanner/maji-service` and
-`ghcr.io/scanner/maji-python-runtime`, tagged with the release's version (`0.1.0`,
-`0.1`, `0`). `make up` does not use them: it builds both images from the checkout.
+`ghcr.io/scanner/maji-python-runtime`, tagged with the release's version and its major and minor version (`0.1.0`
+and `0.1`). `make up` does not use them: it builds both images from the checkout.
 
 To remove maji-mcp: `make down`, then remove the `maji-*` volumes and the two images
 with Docker, delete `~/.config/maji-mcp/`, `~/.cache/maji-mcp/`,

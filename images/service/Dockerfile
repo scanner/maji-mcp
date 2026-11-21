@@ -22,6 +22,12 @@ RUN npm run build
 
 FROM python:3.14-slim@sha256:af8a5aa14780025dbfbcfbc81bd8a91ebd87711dd5b0f48ed71090949dd7cb1d
 
+# ghcr.io lists a published image with the repository its `source` label names.
+#
+LABEL org.opencontainers.image.source=https://github.com/scanner/maji-mcp
+LABEL org.opencontainers.image.description="maji-mcp's services: the broker, the runner, the gateway and the control plane"
+LABEL org.opencontainers.image.licenses=BSD-3-Clause
+
 COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /bin/uv
 
 # The services run as user 10002, never as the executor's 10001. The directories that
